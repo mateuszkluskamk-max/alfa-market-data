@@ -4,7 +4,7 @@
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 const INTERVALS = { "1h": 3600000, "4h": 14400000, "1d": 86400000 };
 const PROVIDERS = ["https://data-api.binance.vision", "https://api.binance.com"];
-const KEY = "latest:v1";
+const KEY = "latest:kraken-usd:v2";
 const MINUTE = 60_000;
 const STALE_MS = 10 * MINUTE;
 
@@ -112,10 +112,10 @@ async function latest(env) {
   if (env?.ALFA_KV) {
     const cached = await env.ALFA_KV.get(KEY, "json");
     const age = cached?.snapshot_utc ? Date.now() - Date.parse(cached.snapshot_utc) : Infinity;
-    if (age >= 0 && age < STALE_MS && Object.keys(cached.symbols || {}).length === 3)
+    if (age >= 0 && age < STALE_MS && Object.keys(cached.symbols || {}).length === 3 && cached.market?.startsWith("Kraken"))
       return {...cached, delivery:"cloudflare_kv", data_age_seconds:Math.round(age / 1000)};
   }
-  const fresh = await collect();
+  const fresh = await collectKraken();
   await store(env, fresh);
   return {...fresh, delivery:"fresh_market_fetch", data_age_seconds:0};
 }
@@ -125,6 +125,94 @@ function reply(obj, status=200) {
       "access-control-allow-origin":"*"}
   });
 }
+
+const KRAKEN_PAIRS = Object.freeze({BTCUSD:"XBTUSD",ETHUSD:"ETHUSD",SOLUSD:"SOLUSD"});
+const KRAKEN_INTERVALS = Object.freeze({"1h":60,"4h":240,"1d":1440});
+
+function krakenCandle(row,interval,index,rows,now) {
+  const dur=INTERVALS[interval];
+  if (!Array.isArray(row) || row.length < 8) throw Error("Malformed Kraken OHLC row");
+  const openMs=Number(row[0])*1000;
+  const o=positive(row[1]),h=positive(row[2]),l=positive(row[3]),c=positive(row[4]);
+  const vwap=positive(row[5]),base=nonnegative(row[6]);
+  const trades=Number(row[7]);
+  if (!Number.isInteger(trades)||trades<0||l>Math.min(o,c)||h<Math.max(o,c))
+    throw Error("Invalid Kraken OHLC or trade count");
+  const prior=index>=20?rows.slice(index-20,index).map(r=>nonnegative(r[6])):null;
+  const med=prior?median(prior):null;
+  const ratio=med>0?base/med:null;
+  const closed=openMs+dur-1 < now;
+  const elapsed=Math.max(0,Math.min(now-openMs,dur));
+  const pace=!closed && ratio!==null && elapsed>=10*MINUTE
+    ? ratio/(elapsed/dur):null;
+  return {
+    open_time_utc:iso(openMs),close_time_utc:iso(openMs+dur-1),
+    open:o,high:h,low:l,close:c,
+    volume_base:base,volume_quote_usd_estimate:+(base*vwap).toFixed(2),trades,
+    closed,change_pct:+((c/o-1)*100).toFixed(3),
+    volume_ratio_median20:ratio===null?null:+ratio.toFixed(3),
+    open_candle_volume_pace_ratio:pace===null?null:+pace.toFixed(3)
+  };
+}
+async function krakenOHLC(pair,interval) {
+  const dur=INTERVALS[interval];
+  const u=new URL("https://api.kraken.com/0/public/OHLC");
+  u.searchParams.set("pair",pair);
+  u.searchParams.set("interval",String(KRAKEN_INTERVALS[interval]));
+  u.searchParams.set("since",String(Math.floor(Date.now()/1000)-60*dur/1000));
+  const response=await fetch(u.toString(),{
+    headers:{"Accept":"application/json"},signal:AbortSignal.timeout(12_000)
+  });
+  if(!response.ok)throw Error("Kraken OHLC HTTP "+response.status+" "+pair+" "+interval);
+  const payload=await response.json();
+  if(!Array.isArray(payload?.error)||payload.error.length)
+    throw Error("Kraken OHLC API error "+pair+" "+interval+" "+String(payload?.error).slice(0,100));
+  const keys=Object.keys(payload.result||{}).filter(k=>k!=="last"&&Array.isArray(payload.result[k]));
+  if(keys.length!==1)throw Error("Ambiguous Kraken pair "+pair+" "+interval);
+  const rows=payload.result[keys[0]].slice(-55);
+  if(rows.length<25)throw Error("Too few Kraken candles "+pair+" "+interval);
+  for(let i=1;i<rows.length;i++)
+    if((Number(rows[i][0])-Number(rows[i-1][0]))*1000!==dur)
+      throw Error("Missing Kraken candle "+pair+" "+interval);
+  const now=Date.now();
+  const last=krakenCandle(rows.at(-1),interval,rows.length-1,rows,now);
+  const prev=krakenCandle(rows.at(-2),interval,rows.length-2,rows,now);
+  if(now-Date.parse(last.open_time_utc)>dur+2*MINUTE)
+    throw Error("Stale Kraken candle "+pair+" "+interval);
+  const lastClosed=last.closed?last:prev;
+  if(!lastClosed.closed)throw Error("No closed Kraken candle "+pair+" "+interval);
+  return {last_closed:lastClosed,in_progress:last.closed?null:last};
+}
+async function getKrakenSymbol([symbol,pair]) {
+  const intervals={};
+  for(const interval of Object.keys(KRAKEN_INTERVALS))
+    intervals[interval]=await krakenOHLC(pair,interval);
+  const last=intervals["1h"].in_progress||intervals["1h"].last_closed;
+  return [symbol,{source_pair:pair,last_price_usd:last.close,
+    price_source:"latest Kraken 1H candle close (not Revolut execution price)",intervals}];
+}
+async function collectKraken() {
+  const pairs=await Promise.all(Object.entries(KRAKEN_PAIRS).map(getKrakenSymbol));
+  const symbols=Object.fromEntries(pairs),alerts=[];
+  for(const [symbol,entry] of pairs) {
+    const c=entry.intervals["4h"].in_progress;
+    if(!c)continue;
+    const threshold=symbol==="BTCUSD"?3:4.5;
+    if(Math.abs(c.change_pct)>=threshold)
+      alerts.push({symbol,type:"4h_movement_in_progress",
+        change_pct:c.change_pct,threshold_pct:threshold,candle_open_utc:c.open_time_utc});
+    if(c.open_candle_volume_pace_ratio!==null&&c.open_candle_volume_pace_ratio>=1.8)
+      alerts.push({symbol,type:"4h_unusual_volume_pace_in_progress",
+        volume_pace_ratio:c.open_candle_volume_pace_ratio,threshold_ratio:1.8,
+        candle_open_utc:c.open_time_utc});
+  }
+  return {schema_version:2,snapshot_utc:iso(Date.now()),
+    market:"Kraken spot / USD (NOT Binance USDT or Revolut X)",
+    source:"Kraken public REST OHLC",data_type:"on-demand REST snapshot, not WebSocket",
+    symbols,alerts,volume_method:"base asset volume; quote USD volume estimated from base volume times candle VWAP",
+    signal_disclaimer:"Market source differs from GitHub Binance USDT. Never merge volume profiles. Thresholds do not imply a trade."};
+}
+
 async function diagnostics() {
   // Public market-data requests only. Returns status/error class, never credentials.
   const targets = [
@@ -183,7 +271,7 @@ export default {
     }
   },
   async scheduled(_controller,env,_ctx) {
-    const snap = await collect();
+    const snap = await collectKraken();
     await store(env, snap);
     console.log("ALFA Cron", snap.snapshot_utc, "KV configured:", !!env?.ALFA_KV);
   }
