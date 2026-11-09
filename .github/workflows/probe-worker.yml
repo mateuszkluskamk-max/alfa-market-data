@@ -47,10 +47,20 @@ jobs:
               print('symbols:', sorted(p.get('symbols',{})))
               print('market:',p.get('market'))
               expected={'BTCUSD','ETHUSD','SOLUSD'}
-              if not expected.issubset(p.get('symbols',{})) or p.get('error') or not p.get('market','').startswith('Kraken'):
-                  print('FAIL: Cloudflare feed not delivering valid Kraken market data')
+              market=p.get('market','')
+              if not expected.issubset(p.get('symbols',{})) or p.get('error') or not (market.startswith('Bitstamp') or market.startswith('Kraken')) or p.get('schema_version',0)<4:
+                  print('FAIL: Cloudflare feed not delivering valid USD market data')
                   sys.exit(1)
-              print('PASS: fresh feed schema and symbols')
+              from datetime import datetime,timezone
+              source_time=datetime.fromisoformat(p['snapshot_utc'].replace('Z','+00:00'))
+              age=(datetime.now(timezone.utc)-source_time).total_seconds()
+              print('age_seconds:',round(age,2))
+              if age<0 or age>300: raise RuntimeError('Data older than 5 minutes')
+              for name in expected:
+                  iv=p['symbols'][name]['intervals']
+                  if set(iv)!={'1h','4h','1d'} or not all(iv[k]['last_closed']['closed'] for k in iv):
+                      raise RuntimeError('Invalid closed candles '+name)
+              print('PASS: fresh USD feed, 3 symbols, 1H/4H/1D')
           except Exception as e:
               print('Response not JSON:',type(e).__name__,str(e)[:250])
               sys.exit(1)
