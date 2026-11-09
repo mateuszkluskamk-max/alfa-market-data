@@ -16,15 +16,10 @@ jobs:
         run: sleep 35
       - name: Probe Bitstamp Coinbase API from Cloudflare
         run: |
+          curl --fail-with-body -sS --max-time 75 -H 'Accept: application/json' 'https://alfa-market-data.mateuszkluska-mk.workers.dev/provider-check' -o /tmp/providers.json
           python3 - <<'PY'
-          import json, urllib.request
-          url='https://alfa-market-data.mateuszkluska-mk.workers.dev/provider-check'
-          try:
-              with urllib.request.urlopen(url, timeout=80) as r:
-                  j=json.load(r)
-              for c in j.get('checks',[]): print(c,flush=True)
-              if len(j.get('checks',[])) != 6: raise RuntimeError('Provider list incomplete')
-          except Exception as e:
-              print('FAILED:',type(e).__name__,str(e))
-              raise
+          import json
+          j=json.load(open('/tmp/providers.json'))
+          for c in j.get('checks',[]): print(c,flush=True)
+          if len(j.get('checks',[]))!=6: raise RuntimeError('Provider list incomplete')
           PY
