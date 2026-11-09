@@ -20,4 +20,4 @@ jobs:
       - name: Validate worker JavaScript
         run: node --check src/index.js
       - name: Validate Cloudflare configuration
-        run: node -e "const c=require('./wrangler.jsonc'); if(!c.triggers.crons.includes('*/5 * * * *')) process.exit(1)"
+        run: node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('wrangler.jsonc','utf8')); if(!c.triggers.crons.includes('*/5 * * * *')) process.exit(1)"
