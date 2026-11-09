@@ -14,13 +14,23 @@ jobs:
     timeout-minutes: 4
     steps:
       - name: Allow Cloudflare Git deployment to catch up
-        run: sleep 4
+        run: sleep 35
       - name: Test public endpoint and report safe connectivity diagnostics
         run: |
           set -eu
           HOST='https://alfa-market-data.mateuszkluska-mk.workers.dev'
           echo '=== Worker diagnostics (Binance / Kraken public API statuses) ==='
-          curl -sS --max-time 40 -i "$HOST/diagnostics" || true
+          curl -sS --max-time 60 "$HOST/diagnostics" -o /tmp/alfa-diagnostics.json || true
+          python3 - <<'PY'
+          import json
+          try:
+              j=json.load(open('/tmp/alfa-diagnostics.json'))
+              print('Diagnostics version:',j.get('diagnostics_version'))
+              print('Collector:',j.get('collector'))
+              for r in j.get('checks',[]):print('Network:',r.get('name'),r.get('http_status'),r.get('api_error'))
+              for r in j.get('pairValidation',[]):print('OHLC:',r.get('symbol'),r.get('interval'), 'OK' if r.get('ok') else r.get('error'))
+          except Exception as exc: print('Diagnostics unreadable:',str(exc))
+          PY
           echo
           echo '=== Root route / code capabilities ==='
           curl -sS --max-time 15 "$HOST/" || true
