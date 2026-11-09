@@ -214,38 +214,50 @@ async function collectKraken() {
 }
 
 async function diagnostics() {
-  // Public market-data requests only. Returns status/error class, never credentials.
-  const targets = [
-    ["binance_market_ping","https://data-api.binance.vision/api/v3/ping"],
-    ["binance_market_candles","https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=4h&limit=25"],
-    ["binance_spot_ping","https://api.binance.com/api/v3/ping"],
-    ["kraken_public_time","https://api.kraken.com/0/public/Time"]
-  ];
-  const checks = await Promise.all(targets.map(async ([name,url]) => {
+  const checks = [];
+  for (const [name, url] of [
+    ["kraken_time", "https://api.kraken.com/0/public/Time"],
+    ["kraken_btc_4h", "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=240"],
+    ["kraken_eth_4h", "https://api.kraken.com/0/public/OHLC?pair=ETHUSD&interval=240"],
+    ["kraken_sol_4h", "https://api.kraken.com/0/public/OHLC?pair=SOLUSD&interval=240"]
+  ]) {
     try {
-      const response = await fetch(url,{
-        headers:{"Accept":"application/json"},
-        signal:AbortSignal.timeout(8000)
-      });
+      const response = await fetch(url, {headers:{"Accept":"application/json"},signal:AbortSignal.timeout(8000)});
       const body = await response.text();
-      return {name,http_status:response.status,ok:response.ok,
-        content_type:response.headers.get("content-type"),
-        body_prefix:body.slice(0,140)};
+      let apiError=null, rows=null;
+      try {
+        const parsed=JSON.parse(body);
+        apiError=parsed?.error||null;
+        rows=Object.entries(parsed?.result||{}).find(([k,v])=>k!=="last"&&Array.isArray(v))?.[1]?.length ?? null;
+      } catch (_) {}
+      checks.push({name,http_status:response.status,ok:response.ok,
+        api_error:apiError,rows,body_prefix:body.startsWith("{")?null:body.slice(0,100)});
     } catch(err) {
-      return {name,ok:false,error:String(err).slice(0,180)};
+      checks.push({name,ok:false,error:String(err).slice(0,180)});
     }
-  }));
-  let parser = {ok:false};
-  try {
-    const symbol = await getSymbol("BTCUSDT");
-    parser = {ok:true,price:symbol.last_price_usdt,
-      last_closed_4h:symbol.intervals["4h"].last_closed.open_time_utc};
-  } catch(err) {
-    parser = {ok:false,error:String(err).slice(0,240)};
   }
-  return {snapshot_utc:iso(Date.now()),service:"alfa-market-data",
-    checks,parser,git_backup:"separate",
-    purpose:"public diagnostics; not a trading signal"};
+  const pairValidation = [];
+  for (const [symbol,pair] of Object.entries(KRAKEN_PAIRS)) {
+    for (const interval of Object.keys(KRAKEN_INTERVALS)) {
+      try {
+        const value=await krakenOHLC(pair,interval);
+        pairValidation.push({symbol,interval,ok:true,
+          last_closed_utc:value.last_closed.open_time_utc,
+          in_progress_utc:value.in_progress?.open_time_utc??null});
+      } catch(e) {
+        pairValidation.push({symbol,interval,ok:false,error:String(e).slice(0,270)});
+      }
+    }
+  }
+  let collector = {ok:false};
+  try {
+    const snapshot=await collectKraken();
+    collector={ok:true,market:snapshot.market,symbols:Object.keys(snapshot.symbols)};
+  } catch(e) {collector={ok:false,error:String(e).slice(0,270)};}
+  return {diagnostics_version:"kraken-2026-11-09-v2",
+    snapshot_utc:iso(Date.now()),service:"alfa-market-data",
+    checks,pairValidation,collector,git_backup:"separate",
+    purpose:"diagnostics only, not a trading signal"};
 }
 
 export default {
@@ -262,7 +274,7 @@ export default {
           note:"Live /latest.json endpoint fetches from exchange when KV is absent/stale"});
       } catch(e) { return reply({status:"error", error:"health_check_failed"},503); }
     }
-    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",routes:["/latest.json","/health","/diagnostics"]});
+    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Kraken Spot USD",version:"kraken-2026-11-09-v2",routes:["/latest.json","/health","/diagnostics"]});
     try { return reply(await latest(env)); }
     catch(e) {
       console.error("live snapshot failed", String(e));
