@@ -1,7 +1,7 @@
 {
   "name": "alfa-market-data",
   "main": "src/index.js",
-  "compatibility_date": "2026-10-01",
+  "compatibility_date": "2026-11-09",
   "workers_dev": true,
   "triggers": {
     "crons": [
@@ -9,6 +9,9 @@
     ]
   },
   "observability": {
+    "enabled": true
+  },
+  "cache": {
     "enabled": true
   }
 }
