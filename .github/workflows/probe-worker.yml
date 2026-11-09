@@ -26,13 +26,19 @@ jobs:
           CODE=$(curl -sS --max-time 50 -o /tmp/alfa-latest.json -w '%{http_code}' "$HOST/latest.json" || true)
           echo "HTTP STATUS: $CODE"
           python3 - <<'PY'
-          import json
+          import json,sys
           try:
               p=json.load(open('/tmp/alfa-latest.json'))
               print('snapshot_utc:',p.get('snapshot_utc'))
               print('error:',p.get('error'))
               print('symbols:', sorted(p.get('symbols',{})))
               print('market:',p.get('market'))
+              expected={'BTCUSD','ETHUSD','SOLUSD'}
+              if not expected.issubset(p.get('symbols',{})) or p.get('error') or not p.get('market','').startswith('Kraken'):
+                  print('FAIL: Cloudflare feed not delivering valid Kraken market data')
+                  sys.exit(1)
+              print('PASS: fresh feed schema and symbols')
           except Exception as e:
               print('Response not JSON:',type(e).__name__,str(e)[:250])
+              sys.exit(1)
           PY
