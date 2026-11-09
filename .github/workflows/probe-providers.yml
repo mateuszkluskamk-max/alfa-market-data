@@ -1,0 +1,30 @@
+name: Verify ALFA alternate providers
+on:
+  push:
+    paths:
+      - 'src/index.js'
+      - '.github/workflows/probe-providers.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Allow Cloudflare deployment
+        run: sleep 35
+      - name: Probe Bitstamp Coinbase API from Cloudflare
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request
+          url='https://alfa-market-data.mateuszkluska-mk.workers.dev/provider-check'
+          try:
+              with urllib.request.urlopen(url, timeout=80) as r:
+                  j=json.load(r)
+              for c in j.get('checks',[]): print(c,flush=True)
+              if len(j.get('checks',[])) != 6: raise RuntimeError('Provider list incomplete')
+          except Exception as e:
+              print('FAILED:',type(e).__name__,str(e))
+              raise
+          PY
