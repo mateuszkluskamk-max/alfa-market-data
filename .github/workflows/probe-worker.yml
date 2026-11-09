@@ -7,7 +7,7 @@ on:
       - '.github/workflows/probe-worker.yml'
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   probe:
     runs-on: ubuntu-latest
@@ -68,3 +68,12 @@ jobs:
           PY
       - name: Verify GitHub mirror code with production Cloudflare feed
         run: python scripts/mirror_worker.py
+      - name: Publish confirmed Cloudflare mirror to GitHub
+        run: |
+          git config user.name "alfa-data-bot"
+          git config user.email "alfa-data-bot@users.noreply.github.com"
+          git add data/cloudflare_latest.json
+          if ! git diff --cached --quiet; then
+            git commit -m "[skip ci] data: publish verified Cloudflare snapshot"
+            git push
+          fi
