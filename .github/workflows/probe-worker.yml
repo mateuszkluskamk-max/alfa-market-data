@@ -14,13 +14,16 @@ jobs:
     timeout-minutes: 4
     steps:
       - name: Allow Cloudflare Git deployment to catch up
-        run: sleep 60
+        run: sleep 4
       - name: Test public endpoint and report safe connectivity diagnostics
         run: |
           set -eu
           HOST='https://alfa-market-data.mateuszkluska-mk.workers.dev'
           echo '=== Worker diagnostics (Binance / Kraken public API statuses) ==='
           curl -sS --max-time 40 -i "$HOST/diagnostics" || true
+          echo
+          echo '=== Root route / code capabilities ==='
+          curl -sS --max-time 15 "$HOST/" || true
           echo
           echo '=== Latest endpoint HTTP status and data validation ==='
           CODE=$(curl -sS --max-time 50 -o /tmp/alfa-latest.json -w '%{http_code}' "$HOST/latest.json" || true)
