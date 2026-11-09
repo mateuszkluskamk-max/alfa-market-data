@@ -31,6 +31,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes"
           else
-            git commit -m "data: refresh market snapshot"
+            git commit -m "[skip ci] data: refresh market snapshot"
             git push
           fi
