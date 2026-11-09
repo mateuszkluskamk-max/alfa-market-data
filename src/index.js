@@ -4,7 +4,7 @@
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 const INTERVALS = { "1h": 3600000, "4h": 14400000, "1d": 86400000 };
 const PROVIDERS = ["https://data-api.binance.vision", "https://api.binance.com"];
-const KEY = "latest:kraken-usd:v2";
+const KEY = "latest:kraken-usd:v3";
 const MINUTE = 60_000;
 const STALE_MS = 10 * MINUTE;
 
@@ -115,7 +115,7 @@ async function latest(env) {
     if (age >= 0 && age < STALE_MS && Object.keys(cached.symbols || {}).length === 3 && cached.market?.startsWith("Kraken"))
       return {...cached, delivery:"cloudflare_kv", data_age_seconds:Math.round(age / 1000)};
   }
-  const fresh = await collectKraken();
+  const fresh = await liveSnapshot();
   await store(env, fresh);
   return {...fresh, delivery:"fresh_market_fetch", data_age_seconds:0};
 }
@@ -126,138 +126,189 @@ function reply(obj, status=200) {
   });
 }
 
-const KRAKEN_PAIRS = Object.freeze({BTCUSD:"XBTUSD",ETHUSD:"ETHUSD",SOLUSD:"SOLUSD"});
-const KRAKEN_INTERVALS = Object.freeze({"1h":60,"4h":240,"1d":1440});
+// Kraken REST permits up to 720 hourly candles. We make ONE call per market,
+// then aggregate UTC-aligned hours into 4H and 1D candles (three calls total).
+const KRAKEN_PAIRS = Object.freeze({BTCUSD:"XBTUSD", ETHUSD:"ETHUSD", SOLUSD:"SOLUSD"});
+const KRAKEN_INTERVALS = Object.freeze({"1h":3600000,"4h":14400000,"1d":86400000});
+const KRAKEN_URL = "https://api.kraken.com/0/public/OHLC";
+const CACHE_FOR_MS = 120_000;
+let memo = null, memoAt = 0, inFlight = null;
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+async function krakenHourly(pair) {
+  const url = new URL(KRAKEN_URL);
+  url.searchParams.set("pair",pair);
+  url.searchParams.set("interval","60");
+  // Enough hourly candles for 20 complete daily volume baselines.
+  url.searchParams.set("since",String(Math.floor(Date.now()/1000) - 28 * 86400));
+  let failure = "unknown";
+  for (let attempt=0;attempt<3;attempt++) {
+    try {
+      const response = await fetch(url.toString(),{
+        headers:{"Accept":"application/json"},
+        signal:AbortSignal.timeout(12_000)
+      });
+      if (!response.ok) throw Error("HTTP " + response.status);
+      const body = await response.json();
+      if (!Array.isArray(body?.error)) throw Error("Malformed Kraken response");
+      if (body.error.length) {
+        const err = body.error.join(";");
+        if (err.toLowerCase().includes("too many requests")) {
+          failure = err;
+          if (attempt < 2) { await sleep((attempt + 1) * 2200); continue; }
+        }
+        throw Error("Kraken OHLC error: " + err);
+      }
+      const keys = Object.keys(body?.result || {}).filter(k=>k!=="last"&&Array.isArray(body.result[k]));
+      if(keys.length!==1)throw Error("Kraken pair response ambiguous");
+      const rows=body.result[keys[0]];
+      if(rows.length < 24*21 + 24)throw Error("Insufficient Kraken 1H candles: " + rows.length);
+      for(let i=1;i<rows.length;i++)
+        if((Number(rows[i][0])-Number(rows[i-1][0])) !== 3600)
+          throw Error("Gap or duplicate in Kraken 1H candles");
+      const now=Date.now();
+      if(now-Number(rows.at(-1)[0])*1000 > 3600000+120000)
+        throw Error("Stale Kraken 1H candle");
+      return rows;
+    } catch(err) {
+      failure=String(err);
+      if(attempt===2)break;
+      // Retry transport errors as well as Kraken rate limiting.
+      await sleep((attempt+1)*2200);
+    }
+  }
+  throw Error("Kraken " + pair + ": " + failure);
+}
+
+function synthesizedRows(hourly, duration) {
+  const buckets = new Map();
+  for(const row of hourly) {
+    if(!Array.isArray(row)||row.length<8)throw Error("Malformed Kraken hourly candle");
+    const hourStart=Number(row[0])*1000;
+    const bucket=Math.floor(hourStart/duration)*duration;
+    if(!buckets.has(bucket))buckets.set(bucket,[]);
+    buckets.get(bucket).push(row);
+  }
+  const groups=[];
+  const now=Date.now();
+  for(const [bucket, rows] of buckets.entries()) {
+    const expected=duration/3600000;
+    if(Number(rows[0][0])*1000 !== bucket) {
+      if(groups.length===0)continue; // oldest partial bucket
+      throw Error("Gap at beginning of aggregated Kraken UTC bucket");
+    }
+    const isCurrent=bucket+duration>now;
+    const expectedNow=isCurrent?Math.floor((now-bucket)/3600000)+1:expected;
+    if(rows.length !== expectedNow) throw Error("Missing hourly rows for aggregate "+
+      duration+" bucket "+iso(bucket)+" ("+rows.length+"/"+expectedNow+")");
+    const o=positive(rows[0][1]);
+    const c=positive(rows.at(-1)[4]);
+    let high=-Infinity,low=Infinity,base=0,quote=0,trades=0;
+    for(const r of rows) {
+      high=Math.max(high,positive(r[2]));
+      low=Math.min(low,positive(r[3]));
+      const vol=nonnegative(r[6]);
+      base+=vol;
+      quote+=vol*positive(r[5]); // approximate quote turnover from hourly VWAP
+      const n=Number(r[7]);
+      if(!Number.isInteger(n)||n<0)throw Error("Invalid Kraken trade count");
+      trades+=n;
+    }
+    // Compatible with krakenCandle input positions (UTC open, OHLC, VWAP, base, trades).
+    groups.push([Math.floor(bucket/1000),o,high,low,c,base>0?quote/base:c,base,trades]);
+  }
+  return groups;
+}
 
 function krakenCandle(row,interval,index,rows,now) {
-  const dur=INTERVALS[interval];
-  if (!Array.isArray(row) || row.length < 8) throw Error("Malformed Kraken OHLC row");
+  const dur=KRAKEN_INTERVALS[interval];
   const openMs=Number(row[0])*1000;
   const o=positive(row[1]),h=positive(row[2]),l=positive(row[3]),c=positive(row[4]);
   const vwap=positive(row[5]),base=nonnegative(row[6]);
   const trades=Number(row[7]);
-  if (!Number.isInteger(trades)||trades<0||l>Math.min(o,c)||h<Math.max(o,c))
-    throw Error("Invalid Kraken OHLC or trade count");
+  if(!Number.isInteger(trades)||trades<0||l>Math.min(o,c)||h<Math.max(o,c))
+    throw Error("Invalid Kraken OHLC");
   const prior=index>=20?rows.slice(index-20,index).map(r=>nonnegative(r[6])):null;
   const med=prior?median(prior):null;
   const ratio=med>0?base/med:null;
   const closed=openMs+dur-1 < now;
   const elapsed=Math.max(0,Math.min(now-openMs,dur));
-  const pace=!closed && ratio!==null && elapsed>=10*MINUTE
-    ? ratio/(elapsed/dur):null;
-  return {
-    open_time_utc:iso(openMs),close_time_utc:iso(openMs+dur-1),
-    open:o,high:h,low:l,close:c,
-    volume_base:base,volume_quote_usd_estimate:+(base*vwap).toFixed(2),trades,
-    closed,change_pct:+((c/o-1)*100).toFixed(3),
+  const pace=!closed&&ratio!==null&&elapsed>=10*MINUTE?ratio/(elapsed/dur):null;
+  return {open_time_utc:iso(openMs),close_time_utc:iso(openMs+dur-1),
+    open:o,high:h,low:l,close:c,volume_base:base,
+    volume_quote_usd_estimate:+(base*vwap).toFixed(2),trades,closed,
+    change_pct:+((c/o-1)*100).toFixed(3),
     volume_ratio_median20:ratio===null?null:+ratio.toFixed(3),
-    open_candle_volume_pace_ratio:pace===null?null:+pace.toFixed(3)
-  };
+    open_candle_volume_pace_ratio:pace===null?null:+pace.toFixed(3)};
 }
-async function krakenOHLC(pair,interval) {
-  const dur=INTERVALS[interval];
-  const u=new URL("https://api.kraken.com/0/public/OHLC");
-  u.searchParams.set("pair",pair);
-  u.searchParams.set("interval",String(KRAKEN_INTERVALS[interval]));
-  u.searchParams.set("since",String(Math.floor(Date.now()/1000)-60*dur/1000));
-  const response=await fetch(u.toString(),{
-    headers:{"Accept":"application/json"},signal:AbortSignal.timeout(12_000)
-  });
-  if(!response.ok)throw Error("Kraken OHLC HTTP "+response.status+" "+pair+" "+interval);
-  const payload=await response.json();
-  if(!Array.isArray(payload?.error)||payload.error.length)
-    throw Error("Kraken OHLC API error "+pair+" "+interval+" "+String(payload?.error).slice(0,100));
-  const keys=Object.keys(payload.result||{}).filter(k=>k!=="last"&&Array.isArray(payload.result[k]));
-  if(keys.length!==1)throw Error("Ambiguous Kraken pair "+pair+" "+interval);
-  const rows=payload.result[keys[0]].slice(-55);
-  if(rows.length<25)throw Error("Too few Kraken candles "+pair+" "+interval);
-  for(let i=1;i<rows.length;i++)
-    if((Number(rows[i][0])-Number(rows[i-1][0]))*1000!==dur)
-      throw Error("Missing Kraken candle "+pair+" "+interval);
+function summarizeKraken(rows,interval) {
+  if(rows.length<25)throw Error("Too few aggregated Kraken "+interval+" candles");
   const now=Date.now();
   const last=krakenCandle(rows.at(-1),interval,rows.length-1,rows,now);
   const prev=krakenCandle(rows.at(-2),interval,rows.length-2,rows,now);
-  if(now-Date.parse(last.open_time_utc)>dur+2*MINUTE)
-    throw Error("Stale Kraken candle "+pair+" "+interval);
-  const lastClosed=last.closed?last:prev;
-  if(!lastClosed.closed)throw Error("No closed Kraken candle "+pair+" "+interval);
-  return {last_closed:lastClosed,in_progress:last.closed?null:last};
+  const closed=last.closed?last:prev;
+  if(!closed.closed)throw Error("No closed Kraken "+interval+" candle");
+  if(now-Date.parse(last.open_time_utc)>KRAKEN_INTERVALS[interval]+120000)
+    throw Error("Stale aggregated Kraken "+interval+" candle");
+  return {last_closed:closed,in_progress:last.closed?null:last};
 }
 async function getKrakenSymbol([symbol,pair]) {
-  const intervals={};
-  for(const interval of Object.keys(KRAKEN_INTERVALS))
-    intervals[interval]=await krakenOHLC(pair,interval);
+  const hourly=await krakenHourly(pair);
+  const intervals={
+    "1h":summarizeKraken(hourly,"1h"),
+    "4h":summarizeKraken(synthesizedRows(hourly,14400000),"4h"),
+    "1d":summarizeKraken(synthesizedRows(hourly,86400000),"1d")
+  };
   const last=intervals["1h"].in_progress||intervals["1h"].last_closed;
   return [symbol,{source_pair:pair,last_price_usd:last.close,
-    price_source:"latest Kraken 1H candle close (not Revolut execution price)",intervals}];
+    price_source:"latest Kraken hourly candle close (not Revolut execution price)",intervals}];
 }
 async function collectKraken() {
-  const pairs=await Promise.all(Object.entries(KRAKEN_PAIRS).map(getKrakenSymbol));
+  const pairs=[];
+  for(const item of Object.entries(KRAKEN_PAIRS)) {
+    pairs.push(await getKrakenSymbol(item));
+    // Spread provider requests, avoid three simultaneous calls from one Worker.
+    await sleep(400);
+  }
   const symbols=Object.fromEntries(pairs),alerts=[];
   for(const [symbol,entry] of pairs) {
     const c=entry.intervals["4h"].in_progress;
     if(!c)continue;
     const threshold=symbol==="BTCUSD"?3:4.5;
     if(Math.abs(c.change_pct)>=threshold)
-      alerts.push({symbol,type:"4h_movement_in_progress",
-        change_pct:c.change_pct,threshold_pct:threshold,candle_open_utc:c.open_time_utc});
+      alerts.push({symbol,type:"4h_movement_in_progress",change_pct:c.change_pct,
+        threshold_pct:threshold,candle_open_utc:c.open_time_utc});
     if(c.open_candle_volume_pace_ratio!==null&&c.open_candle_volume_pace_ratio>=1.8)
       alerts.push({symbol,type:"4h_unusual_volume_pace_in_progress",
         volume_pace_ratio:c.open_candle_volume_pace_ratio,threshold_ratio:1.8,
         candle_open_utc:c.open_time_utc});
   }
-  return {schema_version:2,snapshot_utc:iso(Date.now()),
+  return {schema_version:3,snapshot_utc:iso(Date.now()),
     market:"Kraken spot / USD (NOT Binance USDT or Revolut X)",
-    source:"Kraken public REST OHLC",data_type:"on-demand REST snapshot, not WebSocket",
-    symbols,alerts,volume_method:"base asset volume; quote USD volume estimated from base volume times candle VWAP",
-    signal_disclaimer:"Market source differs from GitHub Binance USDT. Never merge volume profiles. Thresholds do not imply a trade."};
+    source:"Kraken public REST 1H; 4H/1D aggregated on UTC boundaries",
+    data_type:"on-demand REST snapshot, not WebSocket",
+    symbols,alerts,volume_method:"hourly base volumes aggregated; quote USD turnover estimated from hourly VWAP",
+    signal_disclaimer:"Market source differs from Binance USDT. Never merge venue volumes. Thresholds do not imply a trade."};
 }
-
+async function liveSnapshot() {
+  if(memo&&Date.now()-memoAt<CACHE_FOR_MS)return memo;
+  if(inFlight)return await inFlight;
+  inFlight=collectKraken().then(s=>{
+    memo=s;memoAt=Date.now();return s;
+  }).finally(()=>{inFlight=null;});
+  return await inFlight;
+}
 async function diagnostics() {
-  const checks = [];
-  for (const [name, url] of [
-    ["kraken_time", "https://api.kraken.com/0/public/Time"],
-    ["kraken_btc_4h", "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=240"],
-    ["kraken_eth_4h", "https://api.kraken.com/0/public/OHLC?pair=ETHUSD&interval=240"],
-    ["kraken_sol_4h", "https://api.kraken.com/0/public/OHLC?pair=SOLUSD&interval=240"]
-  ]) {
-    try {
-      const response = await fetch(url, {headers:{"Accept":"application/json"},signal:AbortSignal.timeout(8000)});
-      const body = await response.text();
-      let apiError=null, rows=null;
-      try {
-        const parsed=JSON.parse(body);
-        apiError=parsed?.error||null;
-        rows=Object.entries(parsed?.result||{}).find(([k,v])=>k!=="last"&&Array.isArray(v))?.[1]?.length ?? null;
-      } catch (_) {}
-      checks.push({name,http_status:response.status,ok:response.ok,
-        api_error:apiError,rows,body_prefix:body.startsWith("{")?null:body.slice(0,100)});
-    } catch(err) {
-      checks.push({name,ok:false,error:String(err).slice(0,180)});
-    }
-  }
-  const pairValidation = [];
-  for (const [symbol,pair] of Object.entries(KRAKEN_PAIRS)) {
-    for (const interval of Object.keys(KRAKEN_INTERVALS)) {
-      try {
-        const value=await krakenOHLC(pair,interval);
-        pairValidation.push({symbol,interval,ok:true,
-          last_closed_utc:value.last_closed.open_time_utc,
-          in_progress_utc:value.in_progress?.open_time_utc??null});
-      } catch(e) {
-        pairValidation.push({symbol,interval,ok:false,error:String(e).slice(0,270)});
-      }
-    }
-  }
-  let collector = {ok:false};
+  let status;
   try {
-    const snapshot=await collectKraken();
-    collector={ok:true,market:snapshot.market,symbols:Object.keys(snapshot.symbols)};
-  } catch(e) {collector={ok:false,error:String(e).slice(0,270)};}
-  return {diagnostics_version:"kraken-2026-11-09-v2",
-    snapshot_utc:iso(Date.now()),service:"alfa-market-data",
-    checks,pairValidation,collector,git_backup:"separate",
-    purpose:"diagnostics only, not a trading signal"};
+    const data=await liveSnapshot();
+    status={ok:true,snapshot_utc:data.snapshot_utc,
+      market:data.market,symbols:Object.keys(data.symbols)};
+  } catch(err) {status={ok:false,error:String(err).slice(0,350)};}
+  return {diagnostics_version:"kraken-hourly-aggregation-v3",
+    snapshot_utc:iso(Date.now()),collector:status,
+    api_calls_per_uncached_snapshot:3,cache_seconds:120,
+    purpose:"diagnostics only; not an investment signal"};
 }
 
 export default {
@@ -274,8 +325,8 @@ export default {
           note:"Live /latest.json endpoint fetches from exchange when KV is absent/stale"});
       } catch(e) { return reply({status:"error", error:"health_check_failed"},503); }
     }
-    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Kraken Spot USD",version:"kraken-2026-11-09-v2",routes:["/latest.json","/health","/diagnostics"]});
-    try { return reply(await latest(env)); }
+    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Kraken Spot USD",version:"kraken-hourly-aggregation-v3",routes:["/latest.json","/health","/diagnostics"]});
+    try { const data = await latest(env); return new Response(JSON.stringify(data), {status:200, headers:{"content-type":"application/json; charset=utf-8","cache-control":"public, max-age=120","access-control-allow-origin":"*"}}); }
     catch(e) {
       console.error("live snapshot failed", String(e));
       return reply({error:"market_data_unavailable",snapshot_utc:null,
@@ -283,7 +334,8 @@ export default {
     }
   },
   async scheduled(_controller,env,_ctx) {
-    const snap = await collectKraken();
+    if(!env?.ALFA_KV) { console.log("ALFA Cron: no KV binding, skipping redundant provider requests"); return; }
+    const snap = await liveSnapshot();
     await store(env, snap);
     console.log("ALFA Cron", snap.snapshot_utc, "KV configured:", !!env?.ALFA_KV);
   }
