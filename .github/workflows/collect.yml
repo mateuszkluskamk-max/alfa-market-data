@@ -23,11 +23,14 @@ jobs:
           python-version: '3.12'
       - name: Download and validate Binance public candles
         run: python scripts/collect.py
+      - name: Mirror Cloudflare market feed (best effort, no stale overwrite)
+        run: |
+          python scripts/mirror_worker.py || echo "Cloudflare mirror unavailable; original Binance snapshot remains intact"
       - name: Publish validated data
         run: |
           git config user.name "alfa-data-bot"
           git config user.email "alfa-data-bot@users.noreply.github.com"
-          git add data/latest.json data/history/
+          git add -A data/
           if git diff --cached --quiet; then
             echo "No changes"
           else
