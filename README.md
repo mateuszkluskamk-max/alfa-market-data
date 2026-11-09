@@ -26,3 +26,9 @@ Filtry dla trwającej świecy 4H: BTC ±3%, ETH/SOL ±4,5%; tempo wolumenu wzgl�
 ## Prywatność
 
 Repozytorium jest publiczne; **nie zapisuj tu kluczy API, danych osobowych, portfela, eksportów transakcji ani danych prywatnych**.
+
+## Nowszy wariant dostarczania danych (09.11.2026)
+
+Godzinowe opóźnienia GitHub Actions mimo cron co 5 minut są potwierdzone. Projekt ma już kod alternatywnego **ALFA Market Feed** opartego na Cloudflare Workers, pozwalający pobierać aktualne świece na żądanie. Moduł przeszedł lokalizowane testy CI, ale **nie został jeszcze wdrożony** — uruchomienie wymaga jednorazowego połączenia konta Cloudflare z repozytorium. Instrukcja: [CLOUDFLARE_SETUP.md](CLOUDFLARE_SETUP.md).
+
+Nie interpretuj zaplanowanego cron jako gwarancji dostępności danych co 5 minut. 
