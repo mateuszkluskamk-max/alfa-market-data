@@ -1,0 +1,36 @@
+name: ALFA Market Data Snapshot
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '2,7,12,17,22,27,32,37,42,47,52,57 * * * *'
+permissions:
+  contents: write
+concurrency:
+  group: alfa-market-data
+  cancel-in-progress: false
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download and validate Binance public candles
+        run: python scripts/collect.py
+      - name: Publish validated data
+        run: |
+          git config user.name "alfa-data-bot"
+          git config user.email "alfa-data-bot@users.noreply.github.com"
+          git add data/latest.json data/history/
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "data: refresh market snapshot"
+            git push
+          fi
