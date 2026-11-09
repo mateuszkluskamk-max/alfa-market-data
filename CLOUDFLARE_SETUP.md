@@ -1,43 +1,35 @@
-# ALFA — alternatywny kanał danych Cloudflare Workers (testowany kod, wdrożenie oczekuje)
+# ALFA Market Feed — stan operacyjny 09.11.2026
 
-## Dlaczego
+**Wdrożony** Cloudflare Worker: `alfa-market-data`, połączony z GitHubem `mateuszkluskamk-max/alfa-market-data`.
 
-9.11.2026 harmonogram GitHub Actions zadeklarowany co pięć minut wykonał odczyty w praktyce głównie co około godzinę. Wynika to z charakteru GitHub Actions schedule (best effort). Nie można tego naprawić gwarantowanie wyłącznie zmianą cron w GitHubie.
+## Produkcja
 
-## Co jest już w repozytorium
+- Publiczny endpoint: https://alfa-market-data.mateuszkluska-mk.workers.dev/latest.json
+- Test statusu: https://alfa-market-data.mateuszkluska-mk.workers.dev/health
+- Test techniczny: https://alfa-market-data.mateuszkluska-mk.workers.dev/diagnostics
+- Źródło podstawowe: **Bitstamp spot USD** dla BTC/USD, ETH/USD, SOL/USD.
+- Źródło awaryjne: **Kraken spot USD**; awaria Bitstamp powoduje próbę całego snapshotu z Kraken, **bez mieszania giełd wewnątrz jednej migawki**.
+- 1H pobierane bezpośrednio z giełdy. 4H i 1D agregowane lokalnie z 1H według pełnych godzin UTC.
+- `snapshot_utc` to czas pobrania; `closed` rozróżnia zamknięte świece od bieżących, otwartych. `last_price_usd` jest ostatnią ceną zamknięcia świecy 1H dostępnej w odczycie, **nie ceną BID/ASK Revolut X**.
+- `volume_base` to wolumen aktywa. `volume_quote_usd_estimate` jest orientacyjny (Bitstamp: średnia typowa (H+L+C)/3 × wolumen; Kraken: VWAP × wolumen). `trades=null` dla Bitstamp oznacza brak danych, nie zero transakcji.
+- Bufor: 120 sekund. Odczyt w krótkim odstępie może zwrócić tę samą migawkę; dla oceny aktualności używaj `snapshot_utc`, **nie** wyłącznie `data_age_seconds`.
 
-- `src/index.js`: Cloudflare Worker serwujący **świeże świece na żądanie** pod `GET /latest.json`, zwracający HTTP 503, gdy dostawca rynku nie odpowiada. `GET /health` sprawdza status zapisanego odczytu.
-- `wrangler.jsonc`: nazwa usługi `alfa-market-feed` i cron `*/5 * * * *` na Cloudflare (UTC, best effort).
-- `scripts/test-worker.mjs`: testy bez dostępu do internetu (podstawowy endpoint, 3 aktywa × 3 interwały, chronologia świec, KV, brak zwracania starych danych jako aktualne).
-- `.github/workflows/validate-worker.yml`: automatyczne testy po zmianach kodu.
+## Weryfikacja
 
-**To jest przygotowana alternatywa, ale nie oznacza, że usługa została już wdrożona.**
+9.11.2026 godz. 20:24 CET: GitHub Actions `Probe ALFA Cloudflare Worker` zweryfikował HTTP 200, świeży `snapshot_utc` (opóźnienie ~0,14 s), wszystkie trzy aktywa i interwały 1H/4H/1D. Publiczny dostęp z niektórych narzędzi ChatGPT nadal może być blokowany. Testy kodu w `Validate ALFA Market Feed` są niezależne od testów żywego API.
 
-## Aktywacja za zgodą właściciela
+## Istotne ograniczenia
 
-1. Załóż / otwórz darmowe konto Cloudflare: https://dash.cloudflare.com/
-2. Workers & Pages → Create application → Connect/import **GitHub repository**.
-3. Udziel Cloudflare GitHub integracji dostępu **tylko** do `mateuszkluskamk-max/alfa-market-data`.
-4. Wybierz repozytorium i branch `main`. Root directory `/`; konfiguracja `wrangler.jsonc`. Jeśli dashboard pyta o build/deploy command, skonfiguruj `npx wrangler deploy`. Nazwa `alfa-market-feed`.
-5. Po wdrożeniu skopiuj publiczny adres `https://alfa-market-feed.<twoja-subdomena>.workers.dev/latest.json` i prześlij go do ALFA.
-6. ALFA sprawdzi: obecność BTC/ETH/SOL, zakres 1H/4H/1D, `snapshot_utc`, ruch wolumenu i poprawny HTTP 503 przy braku źródła. Dopiero potem zmienimy źródło dla istniejących zadań.
+1. GitHub Actions `ALFA Market Data Snapshot` wciąż prowadzi osobne archiwum Binance USDT i może uruchamiać się znacznie rzadziej niż co 5 minut (best effort).
+2. Cloudflare ma cron co 5 minut, ale gdy nie podłączono przestrzeni KV (`ALFA_KV`), cron **nie zapisuje danych** i nie obciąża dostawcy bez potrzeby. Główny endpoint działa **na żądanie**, co ogranicza ryzyko przekroczenia limitów giełdowych.
+3. Jeśli wymagane są udokumentowane migawki co 5 minut niezależnie od zapytań, trzeba podłączyć Cloudflare KV do nazwy `ALFA_KV`, sprawdzić limity darmowego planu i potwierdzić zapisy. Sam cron nie stanowi gwarancji wykonania punktualnie.
+4. Automatyzacje ChatGPT skanujące rynek działają według swojego harmonogramu i mogą nie mieć bezpośredniego dostępu do `workers.dev`. W takim przypadku oznacz Cloudflare jako niedostępne i korzystaj z GitHub, zamiast przedstawiać stare dane jako nowe.
+5. Żadne źródło danych nie składa zleceń. Inwestor zatwierdza i wykonuje transakcje samodzielnie. Bez dźwigni.
 
-**Bez dodatkowej bazy danych:** endpoint `/latest.json` pobiera świeże dane po każdym wywołaniu, działa bez KV; pięciominutowy cron wtedy tylko testuje pobieranie i loguje, ale nie przechowuje snapshotu. Zapis co pięć minut można włączyć przez Cloudflare KV:
+## Rozbudowa i diagnostyka
 
-7. Workers & Pages → KV → utwórz przestrzeń `alfa-market-data-kv`; dodaj do Workera binding nazwany dokładnie `ALFA_KV`.
-8. Następnie do `wrangler.jsonc` dodaj `kv_namespaces` z `binding:"ALFA_KV"` i prawdziwym `id` wygenerowanym przez Cloudflare (bez żadnego hasła); nie zgaduj ID. Po kolejnym deploy testuj `/health`.
-9. Cloudflare może propagować cron przez kilkanaście minut. Sprawdź wydarzenia Cron w panelu. Progi: oczekiwane ~5 minut, alarm `stale` po 10 minutach.
-
-## Rozdział zadań
-
-- GitHub Actions `collect.yml` **pozostaje** mechanizmem zapasowym historii świec.
-- Cloudflare Worker udostępnia aktualny snapshot na każde zapytanie, a po podłączeniu KV dodatkowo zapisuje go co ~5 minut.
-- Automatyzacje ChatGPT ALFA co godzinę i o checkpointach nie zostają dublowane. Nie gwarantują reagowania w ciągu pięciu minut; do takiej reakcji potrzebny osobny kanał alertowania.
-- Brak transakcji automatycznych. Żadnych kluczy giełdowych ani danych użytkownika.
-- Gdy brak aktualnych danych: status `STALE` lub `N/D`, żadnych pozornie świeżych sygnałów.
-
-## Walidacja
-
-- GitHub Actions / `Validate ALFA Market Feed`: testy offline muszą być zielone.
-- Cloudflare / `/latest.json`: pierwszy publiczny odczyt z prawidłowym timestamp.
-- Minimum 12 kolejnych wywołań / 60 minut: policzyć opóźnienie, brakujące dane, błędy HTTP. Tylko wtedy przyjąć system jako operacyjny.
+- Kod: `src/index.js`; konfiguracja: `wrangler.jsonc`.
+- Automatyczne testy: `.github/workflows/validate-worker.yml` oraz `.github/workflows/probe-worker.yml`.
+- W razie awarii sprawdź kolejno: Cloudflare Workers → Wdrożenia, GitHub → Actions, `/health`, `/diagnostics`. Brak świeżych danych = **STALE/N/D**, nie HOLD wywiedziony z nieaktualnego wykresu.
+- Dla ograniczenia niepotrzebnych wdrożeń aktualizacje pliku `data/latest.json` w GitHub mają prefiks commit `[skip ci]`.
+- Nie publikuj tutaj żadnych kluczy API, prywatnych potwierdzeń transakcji, sald ani danych osobowych.
