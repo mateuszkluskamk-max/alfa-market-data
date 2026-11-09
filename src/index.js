@@ -4,7 +4,7 @@
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 const INTERVALS = { "1h": 3600000, "4h": 14400000, "1d": 86400000 };
 const PROVIDERS = ["https://data-api.binance.vision", "https://api.binance.com"];
-const KEY = "latest:kraken-usd:v3";
+const KEY = "latest:multi-venue-usd:v4";
 const MINUTE = 60_000;
 const STALE_MS = 10 * MINUTE;
 
@@ -112,7 +112,7 @@ async function latest(env) {
   if (env?.ALFA_KV) {
     const cached = await env.ALFA_KV.get(KEY, "json");
     const age = cached?.snapshot_utc ? Date.now() - Date.parse(cached.snapshot_utc) : Infinity;
-    if (age >= 0 && age < STALE_MS && Object.keys(cached.symbols || {}).length === 3 && cached.market?.startsWith("Kraken"))
+    if (age >= 0 && age < STALE_MS && Object.keys(cached.symbols || {}).length === 3 && (cached.market?.startsWith("Bitstamp")||cached.market?.startsWith("Kraken")))
       return {...cached, delivery:"cloudflare_kv", data_age_seconds:Math.round(age / 1000)};
   }
   const fresh = await liveSnapshot();
@@ -203,19 +203,18 @@ function synthesizedRows(hourly, duration) {
       duration+" bucket "+iso(bucket)+" ("+rows.length+"/"+expectedNow+")");
     const o=positive(rows[0][1]);
     const c=positive(rows.at(-1)[4]);
-    let high=-Infinity,low=Infinity,base=0,quote=0,trades=0;
+    let high=-Infinity,low=Infinity,base=0,quote=0,trades=0,tradesUnknown=false;
     for(const r of rows) {
       high=Math.max(high,positive(r[2]));
       low=Math.min(low,positive(r[3]));
       const vol=nonnegative(r[6]);
       base+=vol;
       quote+=vol*positive(r[5]); // approximate quote turnover from hourly VWAP
-      const n=Number(r[7]);
-      if(!Number.isInteger(n)||n<0)throw Error("Invalid Kraken trade count");
-      trades+=n;
+      if(r[7]===null||r[7]===undefined)tradesUnknown=true;
+      else {const n=Number(r[7]); if(!Number.isInteger(n)||n<0)throw Error("Invalid trade count");trades+=n;}
     }
     // Compatible with krakenCandle input positions (UTC open, OHLC, VWAP, base, trades).
-    groups.push([Math.floor(bucket/1000),o,high,low,c,base>0?quote/base:c,base,trades]);
+    groups.push([Math.floor(bucket/1000),o,high,low,c,base>0?quote/base:c,base,tradesUnknown?null:trades]);
   }
   return groups;
 }
@@ -225,8 +224,8 @@ function krakenCandle(row,interval,index,rows,now) {
   const openMs=Number(row[0])*1000;
   const o=positive(row[1]),h=positive(row[2]),l=positive(row[3]),c=positive(row[4]);
   const vwap=positive(row[5]),base=nonnegative(row[6]);
-  const trades=Number(row[7]);
-  if(!Number.isInteger(trades)||trades<0||l>Math.min(o,c)||h<Math.max(o,c))
+  const trades=row[7]===null||row[7]===undefined?null:Number(row[7]);
+  if((trades!==null&&(!Number.isInteger(trades)||trades<0))||l>Math.min(o,c)||h<Math.max(o,c))
     throw Error("Invalid Kraken OHLC");
   const prior=index>=20?rows.slice(index-20,index).map(r=>nonnegative(r[6])):null;
   const med=prior?median(prior):null;
@@ -263,13 +262,49 @@ async function getKrakenSymbol([symbol,pair]) {
   return [symbol,{source_pair:pair,last_price_usd:last.close,
     price_source:"latest Kraken hourly candle close (not Revolut execution price)",intervals}];
 }
-async function collectKraken() {
-  const pairs=[];
-  for(const item of Object.entries(KRAKEN_PAIRS)) {
-    pairs.push(await getKrakenSymbol(item));
-    // Spread provider requests, avoid three simultaneous calls from one Worker.
-    await sleep(400);
+const BITSTAMP_PAIRS=Object.freeze({BTCUSD:"btcusd",ETHUSD:"ethusd",SOLUSD:"solusd"});
+async function bitstampHourly(pair) {
+  const url="https://www.bitstamp.net/api/v2/ohlc/"+pair+"/?step=3600&limit=700";
+  let lastError="unknown";
+  for(let attempt=0;attempt<2;attempt++) {
+    try {
+      const response=await fetch(url,{headers:{"Accept":"application/json"},signal:AbortSignal.timeout(12_000)});
+      if(!response.ok)throw Error("Bitstamp HTTP "+response.status);
+      const body=await response.json();
+      const raw=body?.data?.ohlc;
+      if(!Array.isArray(raw)||raw.length<24*21+24)
+        throw Error("Bitstamp returned insufficient hourly candles");
+      const rows=raw.map(k=>{
+        const o=positive(k.open),h=positive(k.high),l=positive(k.low),c=positive(k.close);
+        const v=nonnegative(k.volume);
+        const typical=(h+l+c)/3; // estimate; Bitstamp OHLC does not supply hourly VWAP
+        return [Number(k.timestamp),o,h,l,c,typical,v,null];
+      }).sort((a,b)=>a[0]-b[0]);
+      for(let i=1;i<rows.length;i++)
+        if(rows[i][0]-rows[i-1][0]!==3600)
+          throw Error("Missing or duplicate Bitstamp hourly candles");
+      if(Date.now()-rows.at(-1)[0]*1000>3600000+120000)
+        throw Error("Stale Bitstamp hourly candle");
+      return rows;
+    }catch(err){
+      lastError=String(err);
+      if(attempt<1)await sleep(1500);
+    }
   }
+  throw Error("Bitstamp "+pair+": "+lastError);
+}
+async function getBitstampSymbol([symbol,pair]) {
+  const hourly=await bitstampHourly(pair);
+  const intervals={
+    "1h":summarizeKraken(hourly,"1h"),
+    "4h":summarizeKraken(synthesizedRows(hourly,14400000),"4h"),
+    "1d":summarizeKraken(synthesizedRows(hourly,86400000),"1d")
+  };
+  const last=intervals["1h"].in_progress||intervals["1h"].last_closed;
+  return [symbol,{source_pair:pair,last_price_usd:last.close,
+    price_source:"latest Bitstamp hourly OHLC close (not a Revolut executable price)",intervals}];
+}
+function marketSnapshot(pairs,market,source,volumeMethod) {
   const symbols=Object.fromEntries(pairs),alerts=[];
   for(const [symbol,entry] of pairs) {
     const c=entry.intervals["4h"].in_progress;
@@ -283,17 +318,40 @@ async function collectKraken() {
         volume_pace_ratio:c.open_candle_volume_pace_ratio,threshold_ratio:1.8,
         candle_open_utc:c.open_time_utc});
   }
-  return {schema_version:3,snapshot_utc:iso(Date.now()),
-    market:"Kraken spot / USD (NOT Binance USDT or Revolut X)",
-    source:"Kraken public REST 1H; 4H/1D aggregated on UTC boundaries",
-    data_type:"on-demand REST snapshot, not WebSocket",
-    symbols,alerts,volume_method:"hourly base volumes aggregated; quote USD turnover estimated from hourly VWAP",
-    signal_disclaimer:"Market source differs from Binance USDT. Never merge venue volumes. Thresholds do not imply a trade."};
+  return {schema_version:4,snapshot_utc:iso(Date.now()),market,source,
+    data_type:"on-demand public REST snapshot, not WebSocket",
+    symbols,alerts,volume_method:volumeMethod,
+    signal_disclaimer:"Do not compare venue volumes as though they were one market. Alerts are not BUY/SELL."};
 }
+async function collectBitstamp() {
+  const pairs=[];
+  for(const item of Object.entries(BITSTAMP_PAIRS))pairs.push(await getBitstampSymbol(item));
+  return marketSnapshot(pairs,"Bitstamp spot / USD (not Revolut X)",
+    "Bitstamp public REST 1H; 4H/1D aggregated UTC",
+    "base volume; quote USD estimate = base volume * hourly typical (H+L+C)/3");
+}
+
+async function collectKraken() {
+  const pairs=[];
+  for(const item of Object.entries(KRAKEN_PAIRS)){
+    pairs.push(await getKrakenSymbol(item));
+    await sleep(400);
+  }
+  return marketSnapshot(pairs,"Kraken spot / USD (not Revolut X)",
+    "Kraken public REST 1H; 4H/1D aggregated UTC",
+    "base volume; quote USD estimated from Kraken hourly VWAP");
+}
+
 async function liveSnapshot() {
   if(memo&&Date.now()-memoAt<CACHE_FOR_MS)return memo;
   if(inFlight)return await inFlight;
-  inFlight=collectKraken().then(s=>{
+  inFlight=(async()=>{
+    try { return await collectBitstamp(); }
+    catch(primaryError) {
+      console.error("Bitstamp failed; trying Kraken:",String(primaryError).slice(0,200));
+      return await collectKraken();
+    }
+  })().then(s=>{
     memo=s;memoAt=Date.now();return s;
   }).finally(()=>{inFlight=null;});
   return await inFlight;
@@ -333,7 +391,7 @@ async function diagnostics() {
     status={ok:true,snapshot_utc:data.snapshot_utc,
       market:data.market,symbols:Object.keys(data.symbols)};
   } catch(err) {status={ok:false,error:String(err).slice(0,350)};}
-  return {diagnostics_version:"kraken-hourly-aggregation-v3",
+  return {diagnostics_version:"multi-venue-bitstamp-kraken-v4",preferred:"Bitstamp",fallback:"Kraken",
     snapshot_utc:iso(Date.now()),collector:status,
     api_calls_per_uncached_snapshot:3,cache_seconds:120,
     purpose:"diagnostics only; not an investment signal"};
@@ -354,7 +412,7 @@ export default {
           note:"Live /latest.json endpoint fetches from exchange when KV is absent/stale"});
       } catch(e) { return reply({status:"error", error:"health_check_failed"},503); }
     }
-    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Kraken Spot USD",version:"kraken-hourly-aggregation-v3",routes:["/latest.json","/health","/diagnostics","/provider-check"]});
+    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Bitstamp Spot USD, Kraken backup",version:"multi-venue-bitstamp-kraken-v4",routes:["/latest.json","/health","/diagnostics","/provider-check"]});
     try { const data = await latest(env); return new Response(JSON.stringify(data), {status:200, headers:{"content-type":"application/json; charset=utf-8","cache-control":"public, max-age=120","access-control-allow-origin":"*"}}); }
     catch(e) {
       console.error("live snapshot failed", String(e));
