@@ -31,3 +31,7 @@ Repozytorium jest publiczne; **nie zapisuj tu kluczy API, danych osobowych, port
 ## Live Feed — Cloudflare Workers (09.11.2026)
 
 Działa osobny publiczny endpoint: https://alfa-market-data.mateuszkluska-mk.workers.dev/latest.json. Odczyt na żądanie, Bitstamp spot USD (główne) albo Kraken spot USD (awaryjne); 1H z giełdy, 4H i 1D agregowane z 1H, cache około 120 sekund. Nie mieszać USD z USDT ani wolumenów różnych giełd. Źródło może być niedostępne bezpośrednio z niektórych narzędzi ChatGPT; w takim przypadku obowiązuje GitHub jako rezerwa. Pełny stan działania i ograniczenia: [CLOUDFLARE_SETUP.md](CLOUDFLARE_SETUP.md).
+
+### Most Cloudflare → GitHub
+
+Aktualna, poprawnie zweryfikowana migawka Cloudflare jest kopiowana przez **istniejące** zadanie GitHub Actions do [`data/cloudflare_latest.json`](data/cloudflare_latest.json). Przy aktualizacji należy sprawdzać **`snapshot_utc`**, nie datę commita ani `mirrored_utc`. Przeprowadzone 09.11.2026 o 20:31 CET wdrożenie i test potwierdziły rzeczywisty zapis BTCUSD/ETHUSD/SOLUSD. Plik może pozostawać starszy, jeżeli harmonogram GitHuba jest opóźniony; API Workers jest odczytem na żądanie, a nie gwarantowanym ciągłym strumieniem.
