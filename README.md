@@ -27,8 +27,7 @@ Filtry dla trwającej świecy 4H: BTC ±3%, ETH/SOL ±4,5%; tempo wolumenu wzgl�
 
 Repozytorium jest publiczne; **nie zapisuj tu kluczy API, danych osobowych, portfela, eksportów transakcji ani danych prywatnych**.
 
-## Nowszy wariant dostarczania danych (09.11.2026)
 
-Godzinowe opóźnienia GitHub Actions mimo cron co 5 minut są potwierdzone. Projekt ma już kod alternatywnego **ALFA Market Feed** opartego na Cloudflare Workers, pozwalający pobierać aktualne świece na żądanie. Moduł przeszedł lokalizowane testy CI, ale **nie został jeszcze wdrożony** — uruchomienie wymaga jednorazowego połączenia konta Cloudflare z repozytorium. Instrukcja: [CLOUDFLARE_SETUP.md](CLOUDFLARE_SETUP.md).
+## Live Feed — Cloudflare Workers (09.11.2026)
 
-Nie interpretuj zaplanowanego cron jako gwarancji dostępności danych co 5 minut. 
+Działa osobny publiczny endpoint: https://alfa-market-data.mateuszkluska-mk.workers.dev/latest.json. Odczyt na żądanie, Bitstamp spot USD (główne) albo Kraken spot USD (awaryjne); 1H z giełdy, 4H i 1D agregowane z 1H, cache około 120 sekund. Nie mieszać USD z USDT ani wolumenów różnych giełd. Źródło może być niedostępne bezpośrednio z niektórych narzędzi ChatGPT; w takim przypadku obowiązuje GitHub jako rezerwa. Pełny stan działania i ograniczenia: [CLOUDFLARE_SETUP.md](CLOUDFLARE_SETUP.md).
