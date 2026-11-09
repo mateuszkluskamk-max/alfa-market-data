@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 4
     steps:
+      - uses: actions/checkout@v4
       - name: Allow Cloudflare Git deployment to catch up
         run: sleep 35
       - name: Test public endpoint and report safe connectivity diagnostics
@@ -65,3 +66,5 @@ jobs:
               print('Response not JSON:',type(e).__name__,str(e)[:250])
               sys.exit(1)
           PY
+      - name: Verify GitHub mirror code with production Cloudflare feed
+        run: python scripts/mirror_worker.py
