@@ -1,0 +1,32 @@
+name: Check Kraken public OHLC
+on:
+  push:
+    paths:
+      - '.github/workflows/check-kraken.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify 1H 4H 1D candle availability
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request, urllib.parse, datetime
+          for pair in ('XBTUSD','ETHUSD','SOLUSD'):
+              for interval in (60,240,1440):
+                  params=urllib.parse.urlencode({'pair':pair,'interval':interval,'since':int(datetime.datetime.now(datetime.timezone.utc).timestamp())-interval*60*55})
+                  url='https://api.kraken.com/0/public/OHLC?'+params
+                  req=urllib.request.Request(url,headers={'User-Agent':'ALFA Market Monitor/1.0'})
+                  try:
+                      with urllib.request.urlopen(req,timeout=15) as resp:
+                          data=json.load(resp)
+                      errs=data.get('error',[])
+                      keys=[k for k in data.get('result',{}) if k!='last']
+                      rows=data['result'].get(keys[0],[]) if keys else []
+                      print(pair,interval,'errors=',errs,'key=',keys,'candles=',len(rows),'last_time=',rows[-1][0] if rows else None,flush=True)
+                  except Exception as e:
+                      print(pair,interval,'ERROR',type(e).__name__,str(e),flush=True)
+          PY
