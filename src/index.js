@@ -125,10 +125,46 @@ function reply(obj, status=200) {
       "access-control-allow-origin":"*"}
   });
 }
+async function diagnostics() {
+  // Public market-data requests only. Returns status/error class, never credentials.
+  const targets = [
+    ["binance_market_ping","https://data-api.binance.vision/api/v3/ping"],
+    ["binance_market_candles","https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=4h&limit=25"],
+    ["binance_spot_ping","https://api.binance.com/api/v3/ping"],
+    ["kraken_public_time","https://api.kraken.com/0/public/Time"]
+  ];
+  const checks = await Promise.all(targets.map(async ([name,url]) => {
+    try {
+      const response = await fetch(url,{
+        headers:{"Accept":"application/json"},
+        signal:AbortSignal.timeout(8000)
+      });
+      const body = await response.text();
+      return {name,http_status:response.status,ok:response.ok,
+        content_type:response.headers.get("content-type"),
+        body_prefix:body.slice(0,140)};
+    } catch(err) {
+      return {name,ok:false,error:String(err).slice(0,180)};
+    }
+  }));
+  let parser = {ok:false};
+  try {
+    const symbol = await getSymbol("BTCUSDT");
+    parser = {ok:true,price:symbol.last_price_usdt,
+      last_closed_4h:symbol.intervals["4h"].last_closed.open_time_utc};
+  } catch(err) {
+    parser = {ok:false,error:String(err).slice(0,240)};
+  }
+  return {snapshot_utc:iso(Date.now()),service:"alfa-market-data",
+    checks,parser,git_backup:"separate",
+    purpose:"public diagnostics; not a trading signal"};
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method !== "GET") return reply({error:"method_not_allowed"}, 405);
+    if (url.pathname === "/diagnostics") return reply(await diagnostics());
     if (url.pathname === "/health") {
       try {
         const row = env?.ALFA_KV ? await env.ALFA_KV.get(KEY,"json") : null;
@@ -138,7 +174,7 @@ export default {
           note:"Live /latest.json endpoint fetches from exchange when KV is absent/stale"});
       } catch(e) { return reply({status:"error", error:"health_check_failed"},503); }
     }
-    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",routes:["/latest.json","/health"]});
+    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",routes:["/latest.json","/health","/diagnostics"]});
     try { return reply(await latest(env)); }
     catch(e) {
       console.error("live snapshot failed", String(e));
