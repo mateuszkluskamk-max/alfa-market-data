@@ -298,6 +298,34 @@ async function liveSnapshot() {
   }).finally(()=>{inFlight=null;});
   return await inFlight;
 }
+async function providerChecks() {
+  const targets = [
+    ["bitstamp_btc_1h","https://www.bitstamp.net/api/v2/ohlc/btcusd/?step=3600&limit=36"],
+    ["bitstamp_eth_1h","https://www.bitstamp.net/api/v2/ohlc/ethusd/?step=3600&limit=36"],
+    ["bitstamp_sol_1h","https://www.bitstamp.net/api/v2/ohlc/solusd/?step=3600&limit=36"],
+    ["coinbase_btc_1h","https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=3600"],
+    ["coinbase_eth_1h","https://api.exchange.coinbase.com/products/ETH-USD/candles?granularity=3600"],
+    ["coinbase_sol_1h","https://api.exchange.coinbase.com/products/SOL-USD/candles?granularity=3600"]
+  ];
+  const checks=[];
+  for (const [name,url] of targets) {
+    try {
+      const resp=await fetch(url,{headers:{"Accept":"application/json"},signal:AbortSignal.timeout(7000)});
+      const txt=await resp.text();
+      let summary={};
+      try{
+        const json=JSON.parse(txt);
+        if(name.startsWith("bitstamp")) {
+          const o=json?.data?.ohlc;
+          summary={bars:Array.isArray(o)?o.length:null,last_utc:o?.at(-1)?.timestamp||null,pair:json?.data?.pair||null};
+        } else summary={bars:Array.isArray(json)?json.length:null,last_utc:Array.isArray(json)?json[0]?.[0]:null};
+      }catch(_){summary={body:txt.slice(0,100)};}
+      checks.push({name,http_status:resp.status,ok:resp.ok,...summary});
+    }catch(err){checks.push({name,ok:false,error:String(err).slice(0,150)});}
+  }
+  return {snapshot_utc:iso(Date.now()),checks,purpose:"public API connectivity; no account or private market data"};
+}
+
 async function diagnostics() {
   let status;
   try {
@@ -315,6 +343,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method !== "GET") return reply({error:"method_not_allowed"}, 405);
+    if (url.pathname === "/provider-check") return reply(await providerChecks());
     if (url.pathname === "/diagnostics") return reply(await diagnostics());
     if (url.pathname === "/health") {
       try {
@@ -325,7 +354,7 @@ export default {
           note:"Live /latest.json endpoint fetches from exchange when KV is absent/stale"});
       } catch(e) { return reply({status:"error", error:"health_check_failed"},503); }
     }
-    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Kraken Spot USD",version:"kraken-hourly-aggregation-v3",routes:["/latest.json","/health","/diagnostics"]});
+    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Kraken Spot USD",version:"kraken-hourly-aggregation-v3",routes:["/latest.json","/health","/diagnostics","/provider-check"]});
     try { const data = await latest(env); return new Response(JSON.stringify(data), {status:200, headers:{"content-type":"application/json; charset=utf-8","cache-control":"public, max-age=120","access-control-allow-origin":"*"}}); }
     catch(e) {
       console.error("live snapshot failed", String(e));
