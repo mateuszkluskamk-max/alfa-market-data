@@ -6,7 +6,9 @@ const INTERVALS = { "1h": 3600000, "4h": 14400000, "1d": 86400000 };
 const PROVIDERS = ["https://data-api.binance.vision", "https://api.binance.com"];
 const KEY = "latest:multi-venue-usd:v4";
 const MINUTE = 60_000;
-const STALE_MS = 10 * MINUTE;
+const STALE_MS = 6 * MINUTE;
+const ARCHIVE_PREFIX = "archive:v1:";
+const ARCHIVE_TTL_SECONDS = 14 * 86400;
 
 function iso(ms) { return new Date(ms).toISOString(); }
 function positive(input) {
@@ -106,7 +108,15 @@ async function collect() {
   };
 }
 async function store(env, data) {
-  if (env?.ALFA_KV) await env.ALFA_KV.put(KEY, JSON.stringify(data));
+  if (!env?.ALFA_KV) return;
+  const stored = {...data, stored_by:"cloudflare_cron", stored_utc:iso(Date.now())};
+  // Two KV writes per five-minute run: latest + immutable 14-day history.
+  // Cron runs 288 times per day => 576 writes, under Free 1000/day.
+  const bucket = new Date(Math.floor(Date.parse(data.snapshot_utc) / (5 * MINUTE)) * (5 * MINUTE))
+    .toISOString().slice(0,16) + "Z";
+  const archiveKey = ARCHIVE_PREFIX + bucket;
+  await env.ALFA_KV.put(archiveKey, JSON.stringify(stored), {expirationTtl:ARCHIVE_TTL_SECONDS});
+  await env.ALFA_KV.put(KEY, JSON.stringify(stored));
 }
 async function latest(env) {
   if (env?.ALFA_KV) {
@@ -116,8 +126,8 @@ async function latest(env) {
       return {...cached, delivery:"cloudflare_kv", data_age_seconds:Math.round(age / 1000)};
   }
   const fresh = await liveSnapshot();
-  await store(env, fresh);
-  return {...fresh, delivery:"fresh_market_fetch", data_age_seconds:0};
+  // On-demand reads do not write KV, protecting Free plan quota.
+  return {...fresh, delivery:"fresh_market_fetch", data_age_seconds:Math.max(0,Math.round((Date.now()-Date.parse(fresh.snapshot_utc))/1000))};
 }
 function reply(obj, status=200) {
   return new Response(JSON.stringify(obj), {
@@ -391,7 +401,7 @@ async function diagnostics() {
     status={ok:true,snapshot_utc:data.snapshot_utc,
       market:data.market,symbols:Object.keys(data.symbols)};
   } catch(err) {status={ok:false,error:String(err).slice(0,350)};}
-  return {diagnostics_version:"multi-venue-bitstamp-kraken-v4",preferred:"Bitstamp",fallback:"Kraken",
+  return {diagnostics_version:"multi-venue-bitstamp-kraken-kv-v5",preferred:"Bitstamp",fallback:"Kraken",
     snapshot_utc:iso(Date.now()),collector:status,
     api_calls_per_uncached_snapshot:3,cache_seconds:120,
     purpose:"diagnostics only; not an investment signal"};
@@ -403,16 +413,27 @@ export default {
     if (request.method !== "GET") return reply({error:"method_not_allowed"}, 405);
     if (url.pathname === "/provider-check") return reply(await providerChecks());
     if (url.pathname === "/diagnostics") return reply(await diagnostics());
+    if (url.pathname === "/history.json") {
+      if(!env?.ALFA_KV) return reply({error:"archive_unavailable",kv_configured:false},503);
+      const date = url.searchParams.get("date") || iso(Date.now()).slice(0,10);
+      if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(date)) return reply({error:"invalid_date"},400);
+      const limit = Math.min(288,Math.max(1,Number(url.searchParams.get("limit"))||60));
+      const prefix = ARCHIVE_PREFIX + date;
+      const listed = await env.ALFA_KV.list({prefix,limit:300});
+      const keys = (listed.keys||[]).map(k=>k.name).sort().slice(-limit);
+      return reply({date,source:"Cloudflare KV, cron-only snapshots",limit,
+        count:keys.length,keys,complete_day:listed.list_complete===true});
+    }
     if (url.pathname === "/health") {
       try {
         const row = env?.ALFA_KV ? await env.ALFA_KV.get(KEY,"json") : null;
         const age = row?.snapshot_utc ? Math.round((Date.now()-Date.parse(row.snapshot_utc))/1000) : null;
         return reply({status:age != null && age <= 600 ? "fresh" : "unverified",
           kv_configured:!!env?.ALFA_KV, snapshot_utc:row?.snapshot_utc ?? null, age_seconds:age,
-          note:"Live /latest.json endpoint fetches from exchange when KV is absent/stale"});
+          note:"Cron saves latest and 14-day history in KV. /latest.json refreshes from exchange if KV is missing or >6 minutes old, without writing KV."});
       } catch(e) { return reply({status:"error", error:"health_check_failed"},503); }
     }
-    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Bitstamp Spot USD, Kraken backup",version:"multi-venue-bitstamp-kraken-v4",routes:["/latest.json","/health","/diagnostics","/provider-check"]});
+    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Bitstamp Spot USD, Kraken backup",version:"multi-venue-bitstamp-kraken-v4",routes:["/latest.json","/health","/history.json","/diagnostics","/provider-check"]});
     try { const data = await latest(env); return new Response(JSON.stringify(data), {status:200, headers:{"content-type":"application/json; charset=utf-8","cache-control":"public, max-age=120","access-control-allow-origin":"*"}}); }
     catch(e) {
       console.error("live snapshot failed", String(e));
