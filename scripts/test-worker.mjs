@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
 import feed from "../src/index.js";
 
-let calls=0,unreachable=false;
-globalThis.fetch = async (url) => {
+let calls=0,unreachable=false,dispatches=0;
+globalThis.fetch = async (url,opts={}) => {
   calls++;
-  if(unreachable)throw new Error("public provider offline");
   const u=new URL(url);
+  if(u.hostname==="api.github.com"){
+    assert.equal(opts.method,"POST");
+    assert.equal(opts.headers.Authorization,"Bearer test-secret");
+    const body=JSON.parse(opts.body);
+    assert.equal(body.event_type,"alfa_cloudflare_sync");
+    dispatches++;
+    return new Response(null,{status:204});
+  }
+  if(unreachable)throw new Error("public provider offline");
   assert.equal(u.hostname,"www.bitstamp.net");
   assert.ok(u.pathname.startsWith("/api/v2/ohlc/"));
   const pair=u.pathname.split("/")[4];
@@ -53,6 +61,11 @@ assert.equal(writes,0,"zero KV writes until cron");
 assert.equal(calls,callsBeforeCache);
 await feed.scheduled({},env,{});
 assert.equal(writes,2,"cron stores latest and one history key");
+await feed.scheduled({scheduledTime:Date.parse("2026-11-10T10:10:00Z")},{...env,GITHUB_DISPATCH_TOKEN:"test-secret"},{});
+assert.equal(dispatches,1,"optional 10-minute dispatch must fire with a secret");
+await feed.scheduled({scheduledTime:Date.parse("2026-11-10T10:15:00Z")},{...env,GITHUB_DISPATCH_TOKEN:"test-secret"},{});
+assert.equal(dispatches,1,"no dispatch on non-matching five-minute cron");
+
 assert.ok(Object.keys(storage).some(k=>k.startsWith("archive:v1:")));
 response=await feed.fetch(request("/latest.json"),env);
 data=await response.json();
@@ -72,4 +85,4 @@ response=await feed.fetch(request("/latest.json"),{});
 assert.equal(response.status,200,"memo cache serves successful recent snapshot");
 const diagnostics=await feed.fetch(request("/diagnostics"),env);
 assert.equal((await diagnostics.json()).collector.ok,true);
-console.log("PASS: Bitstamp 1H→4H/1D, KV cron-only quota 2 writes/run, history, health, diagnostics");
+console.log("PASS: Bitstamp 1H→4H/1D, KV cron-only quota 2 writes/run, history, opt-in dispatch, health, diagnostics");
