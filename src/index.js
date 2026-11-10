@@ -1,7 +1,7 @@
 // ALFA Market Feed: venue-isolated Bitstamp/Kraken USD data and directional risk radar.
 // Optional Cloudflare KV ("ALFA_KV") stores successful scheduled snapshots.
 // No exchange credentials, user balances, or trading actions.
-import {analyzeDirectionalRadar} from "./radar.js";
+import {analyzeDirectionalRadar,mergeSignalWindow} from "./radar.js";
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 const INTERVALS = { "1h": 3600000, "4h": 14400000, "1d": 86400000 };
 const PROVIDERS = ["https://data-api.binance.vision", "https://api.binance.com"];
@@ -134,7 +134,10 @@ async function dispatchGitHubMirror(env, snapshot, scheduledTime) {
 
 async function store(env, data) {
   if (!env?.ALFA_KV) return;
-  const stored = {...data, stored_by:"cloudflare_cron", stored_utc:iso(Date.now())};
+  const prev=await env.ALFA_KV.get(KEY,"json");
+  const recent_events=mergeSignalWindow(prev?.recent_events,data.signals,data.snapshot_utc,data.market);
+  const stored = {...data,recent_events,event_window_hours:6,
+    stored_by:"cloudflare_cron", stored_utc:iso(Date.now())};
   // Two KV writes per five-minute run: latest + immutable 14-day history.
   // Cron runs 288 times per day => 576 writes, under Free 1000/day.
   const bucket = new Date(Math.floor(Date.parse(data.snapshot_utc) / (5 * MINUTE)) * (5 * MINUTE))
@@ -151,8 +154,19 @@ async function latest(env) {
       return {...cached, delivery:"cloudflare_kv", data_age_seconds:Math.round(age / 1000)};
   }
   const fresh = await liveSnapshot();
-  // On-demand reads do not write KV, protecting Free plan quota.
-  return {...fresh, delivery:"fresh_market_fetch", data_age_seconds:Math.max(0,Math.round((Date.now()-Date.parse(fresh.snapshot_utc))/1000))};
+  // Reuse the already-stored rolling ledger without any write on demand.
+  const enriched=await withEventWindow(env,fresh);
+  return {...enriched, delivery:"fresh_market_fetch",
+    data_age_seconds:Math.max(0,Math.round((Date.now()-Date.parse(fresh.snapshot_utc))/1000))};
+}
+async function withEventWindow(env,data){
+  let previous=null;
+  if(env?.ALFA_KV){
+    try {previous=await env.ALFA_KV.get(KEY,"json");}
+    catch(error){console.error("ALFA event-window read failed",String(error).slice(0,120));}
+  }
+  return {...data,recent_events:mergeSignalWindow(previous?.recent_events,data.signals,
+    data.snapshot_utc,data.market),event_window_hours:6};
 }
 function reply(obj, status=200) {
   return new Response(JSON.stringify(obj), {
@@ -461,6 +475,7 @@ export default {
         return reply({schema_version:snap.schema_version,radar_version:snap.radar_version,
           market:snap.market,snapshot_utc:snap.snapshot_utc,delivery:snap.delivery,
           signal_counts:snap.signal_counts,signals:snap.signals,
+          recent_events:snap.recent_events,event_window_hours:snap.event_window_hours,
           assets:Object.fromEntries(Object.entries(snap.symbols).map(([symbol,entry])=>
             [symbol,{last_price_usd:entry.last_price_usd,radar:entry.radar}])),
           warning:"Experimental market warnings only, not trade instructions."});
@@ -481,7 +496,7 @@ export default {
       } catch(e) { return reply({status:"error", error:"health_check_failed"},503); }
     }
     if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Bitstamp Spot USD, Kraken backup",version:"multi-venue-bitstamp-kraken-v4",routes:["/latest.json","/health","/history.json","/diagnostics","/provider-check","/bridge-status.json","/radar.json"]});
-    try { const forceFresh=url.searchParams.get("fresh")==="1"; const data=forceFresh?{...await liveSnapshot(),delivery:"fresh_market_fetch"}:await latest(env); return new Response(JSON.stringify(data), {status:200, headers:{"content-type":"application/json; charset=utf-8","cache-control":"public, max-age=120","access-control-allow-origin":"*"}}); }
+    try { const forceFresh=url.searchParams.get("fresh")==="1"; const data=forceFresh?{...await withEventWindow(env,await liveSnapshot()),delivery:"fresh_market_fetch"}:await latest(env); return new Response(JSON.stringify(data), {status:200, headers:{"content-type":"application/json; charset=utf-8","cache-control":"public, max-age=120","access-control-allow-origin":"*"}}); }
     catch(e) {
       console.error("live snapshot failed", String(e));
       return reply({error:"market_data_unavailable",snapshot_utc:null,
