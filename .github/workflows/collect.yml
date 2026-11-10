@@ -1,6 +1,12 @@
 name: ALFA Market Data Snapshot
 on:
   workflow_dispatch:
+    inputs:
+      cloudflare_mirror_only:
+        description: "Sync the Cloudflare USD snapshot without re-collecting Binance"
+        required: false
+        type: boolean
+        default: false
   repository_dispatch:
     types: [alfa_cloudflare_sync]
   schedule:
@@ -24,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Download and validate Binance public candles
-        if: github.event_name != 'repository_dispatch'
+        if: github.event_name != 'repository_dispatch' && github.event.inputs.cloudflare_mirror_only != 'true'
         run: python scripts/collect.py
       - name: Mirror Cloudflare market feed (best effort, no stale overwrite)
         run: |
