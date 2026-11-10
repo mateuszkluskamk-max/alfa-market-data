@@ -66,6 +66,22 @@ jobs:
               print('Response not JSON:',type(e).__name__,str(e)[:250])
               sys.exit(1)
           PY
+      - name: Verify Cloudflare KV binding and archive status
+        run: |
+          set -eu
+          HOST='https://alfa-market-data.mateuszkluska-mk.workers.dev'
+          curl --fail-with-body -sS --max-time 25 "$HOST/health" -o /tmp/alfa-health.json
+          curl --fail-with-body -sS --max-time 25 "$HOST/history.json?limit=12" -o /tmp/alfa-history.json
+          python3 - <<'PY'
+          import json,sys
+          h=json.load(open("/tmp/alfa-health.json"))
+          a=json.load(open("/tmp/alfa-history.json"))
+          print("KV bound:",h.get("kv_configured"))
+          print("KV latest:",h.get("snapshot_utc"),"seconds:",h.get("age_seconds"))
+          print("KV archive:",a.get("date"),"entries:",a.get("count"),"example:",a.get("keys",[])[-1:] )
+          if h.get("kv_configured") is not True: sys.exit("KV binding not provisioned")
+          if a.get("error") or "keys" not in a: sys.exit("KV archive endpoint not working")
+          PY
       - name: Verify GitHub mirror code with production Cloudflare feed
         run: python scripts/mirror_worker.py
       - name: Publish confirmed Cloudflare mirror to GitHub
