@@ -27,13 +27,13 @@ GitHub Actions `.github/workflows/collect.yml` rozpoznaje wejściowy parametr `c
 - Zapis Cloudflare KV jest niezależny od GitHuba. Awaria dispatch nie unieważnia rynkowych danych zapisanych w KV.
 - Zamknięcie dostępu: usuń sekret w Cloudflare i unieważnij PAT w GitHub.
 
-**Testy kodu i wdrożenia zakończone pomyślnie 10.11.2026.** Potwierdzenie pierwszego faktycznego dispatch z Cron Workera jest odrębnym etapem — wymagane sprawdzenie statusu i eventu GitHub. Docelowa częstotliwość jest best effort, a nie gwarantowane 10 minut.
+**Pierwszy rzeczywisty dispatch z Cloudflare został zweryfikowany 10.11.2026, godz. 11:50 CET.** GitHub Actions uruchomił istniejący workflow `ALFA Market Data Snapshot` jako event `workflow_dispatch` (run ID `42802516914`, conclusion `success`). Krok Binance był `skipped`; kopiowanie Cloudflare i publikacja do repo zakończyły się sukcesem. W `data/cloudflare_latest.json` potwierdzono `snapshot_utc=2026-11-10T10:50:37.154Z`, `market=Bitstamp spot / USD`, `delivery=fresh_market_fetch` i wszystkie trzy aktywa BTCUSD/ETHUSD/SOLUSD. Most pobiera `/latest.json?fresh=1`, pomijając ewentualnie opóźnioną kopię KV bez dodatkowego zapisu do KV. Częstotliwość ~10 minut pozostaje best effort, nie gwarancją każdego cyklu.
 
 
 ## Co jest, a czego jeszcze nie ma
 
 - Cloudflare: prawdziwy zapis co ok. 5 min **zweryfikowany pojedynczym zapisanym cyklem**, wymagane dalsze obserwacje.
-- GitHub: dotychczasowa kopia danych co ok. godzinę, nie stale co 5 min; ścieżka workflow_dispatch co ~10 minut została uruchomiona w kodzie i wymaga obserwacji pierwszych rzeczywistych zadań GitHuba.
+- GitHub: pierwszy workflow_dispatch uruchomiony automatycznie przez Cloudflare i zakończony sukcesem; deklarowana częstotliwość około 10 minut wymaga dalszej obserwacji stabilności.
 - Nie trzeba tworzyć nowych automatyzacji w ChatGPT ani zmieniać checkpointów ALFA.
 - Żadne z opisanych zadań nie składa zleceń inwestycyjnych i nie modyfikuje sald użytkownika.
 
