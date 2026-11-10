@@ -463,7 +463,7 @@ export default {
       } catch(e) { return reply({status:"error", error:"health_check_failed"},503); }
     }
     if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Bitstamp Spot USD, Kraken backup",version:"multi-venue-bitstamp-kraken-v4",routes:["/latest.json","/health","/history.json","/diagnostics","/provider-check","/bridge-status.json"]});
-    try { const data = await latest(env); return new Response(JSON.stringify(data), {status:200, headers:{"content-type":"application/json; charset=utf-8","cache-control":"public, max-age=120","access-control-allow-origin":"*"}}); }
+    try { const forceFresh=url.searchParams.get("fresh")==="1"; const data=forceFresh?{...await liveSnapshot(),delivery:"fresh_market_fetch"}:await latest(env); return new Response(JSON.stringify(data), {status:200, headers:{"content-type":"application/json; charset=utf-8","cache-control":"public, max-age=120","access-control-allow-origin":"*"}}); }
     catch(e) {
       console.error("live snapshot failed", String(e));
       return reply({error:"market_data_unavailable",snapshot_utc:null,
