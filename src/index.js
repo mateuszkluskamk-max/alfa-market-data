@@ -416,7 +416,7 @@ export default {
     if (url.pathname === "/history.json") {
       if(!env?.ALFA_KV) return reply({error:"archive_unavailable",kv_configured:false},503);
       const date = url.searchParams.get("date") || iso(Date.now()).slice(0,10);
-      if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(date)) return reply({error:"invalid_date"},400);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return reply({error:"invalid_date"},400);
       const limit = Math.min(288,Math.max(1,Number(url.searchParams.get("limit"))||60));
       const prefix = ARCHIVE_PREFIX + date;
       const listed = await env.ALFA_KV.list({prefix,limit:300});
