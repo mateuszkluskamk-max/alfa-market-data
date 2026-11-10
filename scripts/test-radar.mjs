@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {analyzeDirectionalRadar} from "../src/radar.js";
+import {analyzeDirectionalRadar,mergeSignalWindow} from "../src/radar.js";
 
 const H=3_600_000;
 const now=Date.parse("2026-11-10T20:32:00Z");
@@ -93,5 +93,24 @@ assert.ok(etherUp.signals.some(s=>s.severity==="ALERT"&&s.direction==="UP"));
   const x=fixture("DOWN");
   x.rows.at(-2)[6]=-10;
   assert.throws(()=>analyzeDirectionalRadar("BTCUSD",x.rows,x.inter,now),/Non-finite|Invalid/);
+}
+{
+  const a="2026-11-10T15:00:00Z";
+  const b="2026-11-10T15:05:00Z";
+  const c="2026-11-10T21:06:00Z";
+  const sig={...down.signals[0],event_id:"BTCUSD|DOWN|early|2026-11-10T14:00:00Z"};
+  const first=mergeSignalWindow([], [sig], a, "Bitstamp spot / USD");
+  assert.equal(first.length,1);
+  assert.equal(first[0].active_now,true);
+  assert.equal(first[0].seen_snapshots,1);
+  const second=mergeSignalWindow(first,[],b,"Bitstamp spot / USD");
+  assert.equal(second[0].active_now,false,"short-lived signal remains in six-hour ledger");
+  assert.equal(second[0].first_seen_utc,a);
+  const reactivated=mergeSignalWindow(second,[sig],b,"Bitstamp spot / USD");
+  assert.equal(reactivated[0].seen_snapshots,2);
+  const crossVenue=mergeSignalWindow(reactivated,[sig],b,"Kraken spot / USD");
+  assert.equal(crossVenue.length,2,"venue change does not blend duplicate event IDs");
+  const expired=mergeSignalWindow(second,[],c,"Bitstamp spot / USD");
+  assert.equal(expired.length,0,"expired events removed");
 }
 console.log("PASS: ALFA radar DOWN/UP WATCH & ALERT, volume filters, 1H range breakout, open-candle caution, missing-hour guards");
