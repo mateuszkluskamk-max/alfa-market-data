@@ -107,6 +107,32 @@ async function collect() {
     symbols, alerts, signal_disclaimer:"Volume/move thresholds are alerts only; never automatic BUY/SELL."
   };
 }
+async function dispatchGitHubMirror(env, snapshot, scheduledTime) {
+  if (!env?.GITHUB_DISPATCH_TOKEN) return {enabled:false,reason:"missing_secret"};
+  // GitHub data mirror every ten minutes; no duplicate ChatGPT automation.
+  const minute=new Date(scheduledTime || Date.now()).getUTCMinutes();
+  if(minute%10!==0)return {enabled:true,dispatched:false,reason:"not_due"};
+  const response=await fetch(
+    "https://api.github.com/repos/mateuszkluskamk-max/alfa-market-data/dispatches",{
+      method:"POST",
+      headers:{
+        "Accept":"application/vnd.github+json",
+        "Content-Type":"application/json",
+        "Authorization":"Bearer "+env.GITHUB_DISPATCH_TOKEN,
+        "User-Agent":"ALFA-Market-Feed/1.0"
+      },
+      body:JSON.stringify({
+        event_type:"alfa_cloudflare_sync",
+        client_payload:{snapshot_utc:snapshot.snapshot_utc,market:snapshot.market}
+      }),
+      signal:AbortSignal.timeout(10000)
+    }
+  );
+  if(response.status!==204)
+    throw Error("GitHub repository_dispatch failed: HTTP "+response.status);
+  return {enabled:true,dispatched:true};
+}
+
 async function store(env, data) {
   if (!env?.ALFA_KV) return;
   const stored = {...data, stored_by:"cloudflare_cron", stored_utc:iso(Date.now())};
@@ -446,5 +472,13 @@ export default {
     const snap = await liveSnapshot();
     await store(env, snap);
     console.log("ALFA Cron", snap.snapshot_utc, "KV configured:", !!env?.ALFA_KV);
+    // Optional: only if user explicitly installed a repo-scoped Cloudflare secret.
+    try {
+      const bridge=await dispatchGitHubMirror(env,snap,_controller?.scheduledTime);
+      console.log("ALFA GitHub bridge",bridge.enabled?"enabled":"disabled",bridge.dispatched||false);
+    } catch(error) {
+      // KV archive remains valid even if optional GitHub dispatch fails.
+      console.error("ALFA optional GitHub dispatch failed",String(error).slice(0,180));
+    }
   }
 };
