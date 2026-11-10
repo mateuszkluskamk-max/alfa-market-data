@@ -1,10 +1,11 @@
-// ALFA Market Feed: fresh public Binance spot OHLCV, served on demand.
+// ALFA Market Feed: venue-isolated Bitstamp/Kraken USD data and directional risk radar.
 // Optional Cloudflare KV ("ALFA_KV") stores successful scheduled snapshots.
 // No exchange credentials, user balances, or trading actions.
+import {analyzeDirectionalRadar} from "./radar.js";
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 const INTERVALS = { "1h": 3600000, "4h": 14400000, "1d": 86400000 };
 const PROVIDERS = ["https://data-api.binance.vision", "https://api.binance.com"];
-const KEY = "latest:multi-venue-usd:v4";
+const KEY = "latest:multi-venue-usd:v5";
 const MINUTE = 60_000;
 const STALE_MS = 6 * MINUTE;
 const ARCHIVE_PREFIX = "archive:v1:";
@@ -146,7 +147,7 @@ async function latest(env) {
   if (env?.ALFA_KV) {
     const cached = await env.ALFA_KV.get(KEY, "json");
     const age = cached?.snapshot_utc ? Date.now() - Date.parse(cached.snapshot_utc) : Infinity;
-    if (age >= 0 && age < STALE_MS && Object.keys(cached.symbols || {}).length === 3 && (cached.market?.startsWith("Bitstamp")||cached.market?.startsWith("Kraken")))
+    if (age >= 0 && age < STALE_MS && cached.schema_version>=5 && Object.keys(cached.symbols || {}).length === 3 && (cached.market?.startsWith("Bitstamp")||cached.market?.startsWith("Kraken")))
       return {...cached, delivery:"cloudflare_kv", data_age_seconds:Math.round(age / 1000)};
   }
   const fresh = await liveSnapshot();
@@ -294,7 +295,8 @@ async function getKrakenSymbol([symbol,pair]) {
   };
   const last=intervals["1h"].in_progress||intervals["1h"].last_closed;
   return [symbol,{source_pair:pair,last_price_usd:last.close,
-    price_source:"latest Kraken hourly candle close (not Revolut execution price)",intervals}];
+    price_source:"latest Kraken hourly candle close (not Revolut execution price)",intervals,
+    radar:analyzeDirectionalRadar(symbol,hourly,intervals)}];
 }
 const BITSTAMP_PAIRS=Object.freeze({BTCUSD:"btcusd",ETHUSD:"ethusd",SOLUSD:"solusd"});
 async function bitstampHourly(pair) {
@@ -336,7 +338,8 @@ async function getBitstampSymbol([symbol,pair]) {
   };
   const last=intervals["1h"].in_progress||intervals["1h"].last_closed;
   return [symbol,{source_pair:pair,last_price_usd:last.close,
-    price_source:"latest Bitstamp hourly OHLC close (not a Revolut executable price)",intervals}];
+    price_source:"latest Bitstamp hourly OHLC close (not a Revolut executable price)",intervals,
+    radar:analyzeDirectionalRadar(symbol,hourly,intervals)}];
 }
 function marketSnapshot(pairs,market,source,volumeMethod) {
   const symbols=Object.fromEntries(pairs),alerts=[];
@@ -352,10 +355,14 @@ function marketSnapshot(pairs,market,source,volumeMethod) {
         volume_pace_ratio:c.open_candle_volume_pace_ratio,threshold_ratio:1.8,
         candle_open_utc:c.open_time_utc});
   }
-  return {schema_version:4,snapshot_utc:iso(Date.now()),market,source,
+  const signals=pairs.flatMap(([,entry])=>entry.radar?.signals||[]);
+  const counts={down:signals.filter(x=>x.direction==="DOWN").length,up:signals.filter(x=>x.direction==="UP").length,
+    alert:signals.filter(x=>x.severity==="ALERT").length};
+  return {schema_version:5,snapshot_utc:iso(Date.now()),market,source,
+    radar_version:"directional-v1",signals,signal_counts:counts,
     data_type:"on-demand public REST snapshot, not WebSocket",
     symbols,alerts,volume_method:volumeMethod,
-    signal_disclaimer:"Do not compare venue volumes as though they were one market. Alerts are not BUY/SELL."};
+    signal_disclaimer:"WATCH/ALERT are risk filters, not price forecasts or BUY/SELL. Indicators are from one venue; cross-venue volumes must not be mixed."};
 }
 async function collectBitstamp() {
   const pairs=[];
@@ -448,6 +455,17 @@ export default {
       return reply({date,source:"Cloudflare KV, cron-only snapshots",limit,
         count:keys.length,keys,complete_day:listed.list_complete===true});
     }
+    if (url.pathname === "/radar.json") {
+      try {
+        const snap=await latest(env);
+        return reply({schema_version:snap.schema_version,radar_version:snap.radar_version,
+          market:snap.market,snapshot_utc:snap.snapshot_utc,delivery:snap.delivery,
+          signal_counts:snap.signal_counts,signals:snap.signals,
+          assets:Object.fromEntries(Object.entries(snap.symbols).map(([symbol,entry])=>
+            [symbol,{last_price_usd:entry.last_price_usd,radar:entry.radar}])),
+          warning:"Experimental market warnings only, not trade instructions."});
+      } catch(error){return reply({error:"radar_unavailable",snapshot_utc:null},503);}
+    }
     if (url.pathname === "/bridge-status.json") {
       if(!env?.ALFA_KV) return reply({status:"unavailable",reason:"kv_not_bound"},503);
       const status=await env.ALFA_KV.get(BRIDGE_STATUS_KEY,"json");
@@ -462,7 +480,7 @@ export default {
           note:"Cron saves latest and 14-day history in KV. /latest.json refreshes from exchange if KV is missing or >6 minutes old, without writing KV."});
       } catch(e) { return reply({status:"error", error:"health_check_failed"},503); }
     }
-    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Bitstamp Spot USD, Kraken backup",version:"multi-venue-bitstamp-kraken-v4",routes:["/latest.json","/health","/history.json","/diagnostics","/provider-check","/bridge-status.json"]});
+    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Bitstamp Spot USD, Kraken backup",version:"multi-venue-bitstamp-kraken-v4",routes:["/latest.json","/health","/history.json","/diagnostics","/provider-check","/bridge-status.json","/radar.json"]});
     try { const forceFresh=url.searchParams.get("fresh")==="1"; const data=forceFresh?{...await liveSnapshot(),delivery:"fresh_market_fetch"}:await latest(env); return new Response(JSON.stringify(data), {status:200, headers:{"content-type":"application/json; charset=utf-8","cache-control":"public, max-age=120","access-control-allow-origin":"*"}}); }
     catch(e) {
       console.error("live snapshot failed", String(e));
