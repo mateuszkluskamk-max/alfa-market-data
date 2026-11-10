@@ -7,9 +7,11 @@ globalThis.fetch = async (url,opts={}) => {
   const u=new URL(url);
   if(u.hostname==="api.github.com"){
     assert.equal(opts.method,"POST");
+    assert.equal(u.pathname,"/repos/mateuszkluskamk-max/alfa-market-data/actions/workflows/collect.yml/dispatches");
     assert.equal(opts.headers.Authorization,"Bearer test-secret");
     const body=JSON.parse(opts.body);
-    assert.equal(body.event_type,"alfa_cloudflare_sync");
+    assert.equal(body.ref,"main");
+    assert.equal(body.inputs.cloudflare_mirror_only,"true");
     dispatches++;
     return new Response(null,{status:204});
   }
@@ -59,12 +61,16 @@ data=await response.json();
 assert.equal(data.delivery,"fresh_market_fetch","on-demand must not write KV");
 assert.equal(writes,0,"zero KV writes until cron");
 assert.equal(calls,callsBeforeCache);
-await feed.scheduled({},env,{});
+await feed.scheduled({scheduledTime:Date.parse("2026-11-10T10:05:00Z")},env,{});
 assert.equal(writes,2,"cron stores latest and one history key");
 await feed.scheduled({scheduledTime:Date.parse("2026-11-10T10:10:00Z")},{...env,GITHUB_DISPATCH_TOKEN:"test-secret"},{});
 assert.equal(dispatches,1,"optional 10-minute dispatch must fire with a secret");
 await feed.scheduled({scheduledTime:Date.parse("2026-11-10T10:15:00Z")},{...env,GITHUB_DISPATCH_TOKEN:"test-secret"},{});
 assert.equal(dispatches,1,"no dispatch on non-matching five-minute cron");
+response=await feed.fetch(request("/bridge-status.json"),env);
+assert.equal(response.status,200);
+assert.equal((await response.json()).status,"accepted_by_github");
+assert.equal(writes,7,"six history+latest writes and one dispatch status");
 
 assert.ok(Object.keys(storage).some(k=>k.startsWith("archive:v1:")));
 response=await feed.fetch(request("/latest.json"),env);
@@ -85,4 +91,4 @@ response=await feed.fetch(request("/latest.json"),{});
 assert.equal(response.status,200,"memo cache serves successful recent snapshot");
 const diagnostics=await feed.fetch(request("/diagnostics"),env);
 assert.equal((await diagnostics.json()).collector.ok,true);
-console.log("PASS: Bitstamp 1H→4H/1D, KV cron-only quota 2 writes/run, history, opt-in dispatch, health, diagnostics");
+console.log("PASS: Bitstamp 1H→4H/1D, KV two writes/cron, Actions workflow_dispatch least privilege, bridge-status, history, health");
