@@ -84,3 +84,11 @@ jobs:
           PY
       - name: Verify GitHub mirror code with production Cloudflare feed
         run: python scripts/mirror_worker.py
+      - name: Inspect Cloudflare dispatch status (public, no secrets)
+        run: |
+          curl --fail-with-body -sS --max-time 20 'https://alfa-market-data.mateuszkluska-mk.workers.dev/bridge-status.json' -o /tmp/bridge-status.json
+          python3 - <<'PY'
+          import json
+          v=json.load(open('/tmp/bridge-status.json'))
+          print('Bridge:', {k:v.get(k) for k in ('status','checked_utc','snapshot_utc','http_status','detail') if k in v})
+          PY
