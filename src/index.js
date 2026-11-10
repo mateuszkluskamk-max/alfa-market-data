@@ -9,6 +9,7 @@ const MINUTE = 60_000;
 const STALE_MS = 6 * MINUTE;
 const ARCHIVE_PREFIX = "archive:v1:";
 const ARCHIVE_TTL_SECONDS = 14 * 86400;
+const BRIDGE_STATUS_KEY = "bridge:status:v1";
 
 function iso(ms) { return new Date(ms).toISOString(); }
 function positive(input) {
@@ -113,7 +114,7 @@ async function dispatchGitHubMirror(env, snapshot, scheduledTime) {
   const minute=new Date(scheduledTime || Date.now()).getUTCMinutes();
   if(minute%10!==0)return {enabled:true,dispatched:false,reason:"not_due"};
   const response=await fetch(
-    "https://api.github.com/repos/mateuszkluskamk-max/alfa-market-data/dispatches",{
+    "https://api.github.com/repos/mateuszkluskamk-max/alfa-market-data/actions/workflows/collect.yml/dispatches",{
       method:"POST",
       headers:{
         "Accept":"application/vnd.github+json",
@@ -121,15 +122,12 @@ async function dispatchGitHubMirror(env, snapshot, scheduledTime) {
         "Authorization":"Bearer "+env.GITHUB_DISPATCH_TOKEN,
         "User-Agent":"ALFA-Market-Feed/1.0"
       },
-      body:JSON.stringify({
-        event_type:"alfa_cloudflare_sync",
-        client_payload:{snapshot_utc:snapshot.snapshot_utc,market:snapshot.market}
-      }),
+      body:JSON.stringify({ref:"main",inputs:{cloudflare_mirror_only:"true"}}),
       signal:AbortSignal.timeout(10000)
     }
   );
   if(response.status!==204)
-    throw Error("GitHub repository_dispatch failed: HTTP "+response.status);
+    throw Error("GitHub workflow_dispatch failed: HTTP "+response.status);
   return {enabled:true,dispatched:true};
 }
 
@@ -450,6 +448,11 @@ export default {
       return reply({date,source:"Cloudflare KV, cron-only snapshots",limit,
         count:keys.length,keys,complete_day:listed.list_complete===true});
     }
+    if (url.pathname === "/bridge-status.json") {
+      if(!env?.ALFA_KV) return reply({status:"unavailable",reason:"kv_not_bound"},503);
+      const status=await env.ALFA_KV.get(BRIDGE_STATUS_KEY,"json");
+      return reply(status||{status:"not_observed",note:"No 10-minute dispatch has been recorded yet"});
+    }
     if (url.pathname === "/health") {
       try {
         const row = env?.ALFA_KV ? await env.ALFA_KV.get(KEY,"json") : null;
@@ -459,7 +462,7 @@ export default {
           note:"Cron saves latest and 14-day history in KV. /latest.json refreshes from exchange if KV is missing or >6 minutes old, without writing KV."});
       } catch(e) { return reply({status:"error", error:"health_check_failed"},503); }
     }
-    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Bitstamp Spot USD, Kraken backup",version:"multi-venue-bitstamp-kraken-v4",routes:["/latest.json","/health","/history.json","/diagnostics","/provider-check"]});
+    if (url.pathname !== "/latest.json") return reply({name:"ALFA Market Feed",source:"Bitstamp Spot USD, Kraken backup",version:"multi-venue-bitstamp-kraken-v4",routes:["/latest.json","/health","/history.json","/diagnostics","/provider-check","/bridge-status.json"]});
     try { const data = await latest(env); return new Response(JSON.stringify(data), {status:200, headers:{"content-type":"application/json; charset=utf-8","cache-control":"public, max-age=120","access-control-allow-origin":"*"}}); }
     catch(e) {
       console.error("live snapshot failed", String(e));
@@ -472,13 +475,26 @@ export default {
     const snap = await liveSnapshot();
     await store(env, snap);
     console.log("ALFA Cron", snap.snapshot_utc, "KV configured:", !!env?.ALFA_KV);
-    // Optional: only if user explicitly installed a repo-scoped Cloudflare secret.
-    try {
-      const bridge=await dispatchGitHubMirror(env,snap,_controller?.scheduledTime);
-      console.log("ALFA GitHub bridge",bridge.enabled?"enabled":"disabled",bridge.dispatched||false);
-    } catch(error) {
-      // KV archive remains valid even if optional GitHub dispatch fails.
-      console.error("ALFA optional GitHub dispatch failed",String(error).slice(0,180));
+    // One Actions workflow_dispatch per UTC 10-minute slot; never publish secrets.
+    const scheduledTime=_controller?.scheduledTime||Date.now();
+    if(new Date(scheduledTime).getUTCMinutes()%10===0) {
+      let status;
+      try {
+        const bridge=await dispatchGitHubMirror(env,snap,scheduledTime);
+        status={checked_utc:iso(Date.now()),snapshot_utc:snap.snapshot_utc,
+          status:bridge.dispatched?"accepted_by_github":bridge.reason||"skipped",
+          detail:"GitHub HTTP 204 means accepted, not yet completed or committed"};
+        console.log("ALFA GitHub dispatch",status.status);
+      } catch(error) {
+        // KV snapshots stay valid if optional GitHub dispatch fails.
+        const errorString=String(error);
+        const http=errorString.match(/HTTP (\d{3})/);
+        status={checked_utc:iso(Date.now()),snapshot_utc:snap.snapshot_utc,
+          status:"dispatch_failed",http_status:http?Number(http[1]):null};
+        console.error("ALFA optional GitHub dispatch failed",status.http_status??"network_error");
+      }
+      try {await env.ALFA_KV.put(BRIDGE_STATUS_KEY,JSON.stringify(status));}
+      catch(error){console.error("ALFA bridge-status write failed",String(error).slice(0,100));}
     }
   }
 };
