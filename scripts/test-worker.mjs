@@ -42,7 +42,10 @@ const request=(p)=>new Request("https://alfa.test"+p);
 let response=await feed.fetch(request("/latest.json"),env);
 assert.equal(response.status,200);
 let data=await response.json();
-assert.equal(data.schema_version,4);
+assert.equal(data.schema_version,5)
+assert.equal(data.radar_version,"directional-v1")
+assert.ok(Array.isArray(data.signals))
+assert.ok(data.symbols.BTCUSD.radar.metrics.closed_24h_pct!==undefined);
 assert.ok(data.market.includes("Bitstamp spot / USD"));
 assert.deepEqual(Object.keys(data.symbols).sort(),["BTCUSD","ETHUSD","SOLUSD"]);
 assert.equal(data.symbols.BTCUSD.last_price_usd,100);
@@ -80,6 +83,11 @@ response=await feed.fetch(request("/latest.json?fresh=1"),env);
 assert.equal(response.status,200);
 assert.equal((await response.json()).delivery,"fresh_market_fetch","mirror bypasses KV replication lag");
 assert.equal(data.stored_by,"cloudflare_cron");
+response=await feed.fetch(request("/radar.json"),env);
+assert.equal(response.status,200);
+const radarAPI=await response.json();
+assert.equal(radarAPI.radar_version,"directional-v1");
+assert.deepEqual(Object.keys(radarAPI.assets).sort(),["BTCUSD","ETHUSD","SOLUSD"]);
 response=await feed.fetch(request("/health"),env);
 assert.equal((await response.json()).status,"fresh");
 response=await feed.fetch(request("/history.json"),env);
