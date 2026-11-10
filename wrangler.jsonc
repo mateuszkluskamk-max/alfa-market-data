@@ -13,5 +13,10 @@
   },
   "cache": {
     "enabled": true
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "ALFA_KV"
+    }
+  ]
 }
