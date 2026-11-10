@@ -22,9 +22,11 @@ globalThis.fetch = async (url) => {
   return new Response(JSON.stringify({data:{pair:pair.toUpperCase(),ohlc:rows}}),{status:200});
 };
 const storage={};
+let writes=0;
 const env={ALFA_KV:{
   async get(key){return storage[key]?JSON.parse(storage[key]):null;},
-  async put(key,value){storage[key]=value;}
+  async put(key,value,opts){writes++;storage[key]=value;assert.ok(!key.startsWith("archive:")||opts.expirationTtl===14*86400);},
+  async list({prefix,limit}){const keys=Object.keys(storage).filter(k=>k.startsWith(prefix)).sort().slice(0,limit).map(name=>({name}));return {keys,list_complete:true};}
 }};
 const request=(p)=>new Request("https://alfa.test"+p);
 let response=await feed.fetch(request("/latest.json"),env);
@@ -46,15 +48,28 @@ assert.equal(calls,3,"exactly three upstream API calls per uncached snapshot");
 const callsBeforeCache=calls;
 response=await feed.fetch(request("/latest.json"),env);
 data=await response.json();
-assert.equal(data.delivery,"cloudflare_kv");
+assert.equal(data.delivery,"fresh_market_fetch","on-demand must not write KV");
+assert.equal(writes,0,"zero KV writes until cron");
 assert.equal(calls,callsBeforeCache);
+await feed.scheduled({},env,{});
+assert.equal(writes,2,"cron stores latest and one history key");
+assert.ok(Object.keys(storage).some(k=>k.startsWith("archive:v1:")));
+response=await feed.fetch(request("/latest.json"),env);
+data=await response.json();
+assert.equal(data.delivery,"cloudflare_kv");
+assert.equal(data.stored_by,"cloudflare_cron");
 response=await feed.fetch(request("/health"),env);
 assert.equal((await response.json()).status,"fresh");
-await feed.scheduled({},env,{});
-assert.ok(Object.keys(storage).length>=1);
+response=await feed.fetch(request("/history.json"),env);
+assert.equal(response.status,200);
+assert.equal((await response.json()).count,1);
+response=await feed.fetch(request("/history.json?date=not-a-date"),env);
+assert.equal(response.status,400);
+response=await feed.fetch(request("/history.json"),{});
+assert.equal(response.status,503);
 unreachable=true;
 response=await feed.fetch(request("/latest.json"),{});
 assert.equal(response.status,200,"memo cache serves successful recent snapshot");
 const diagnostics=await feed.fetch(request("/diagnostics"),env);
 assert.equal((await diagnostics.json()).collector.ok,true);
-console.log("PASS: Bitstamp three calls, UTC 1H→4H/1D, venue separation, KV/memo, cron, diagnostics");
+console.log("PASS: Bitstamp 1H→4H/1D, KV cron-only quota 2 writes/run, history, health, diagnostics");
