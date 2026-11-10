@@ -21,8 +21,8 @@
 ## Istotne ograniczenia
 
 1. GitHub Actions `ALFA Market Data Snapshot` wciąż prowadzi osobne archiwum Binance USDT i może uruchamiać się znacznie rzadziej niż co 5 minut (best effort).
-2. Cloudflare ma cron co 5 minut, ale gdy nie podłączono przestrzeni KV (`ALFA_KV`), cron **nie zapisuje danych** i nie obciąża dostawcy bez potrzeby. Główny endpoint działa **na żądanie**, co ogranicza ryzyko przekroczenia limitów giełdowych.
-3. Jeśli wymagane są udokumentowane migawki co 5 minut niezależnie od zapytań, trzeba podłączyć Cloudflare KV do nazwy `ALFA_KV`, sprawdzić limity darmowego planu i potwierdzić zapisy. Sam cron nie stanowi gwarancji wykonania punktualnie.
+2. **Aktualizacja 10.11.2026:** Cloudflare KV `ALFA_KV` został automatycznie utworzony i podłączony przez Wrangler. Potwierdzone dwa kolejne archiwalne zapisy Cron Trigger: `archive:v1:2026-11-10T10:05Z` oraz `archive:v1:2026-11-10T10:10Z`; testy statusu `/health` i `/history.json` zaliczone. Przechowujemy maksymalnie 14 dni historii; zapisuje tylko cron, maksymalnie 2 klucze na cykl (~576/dobę). Zapisy na żądanie wyłączone z uwagi na bezpłatny limit 1000 zapisów/dobę.
+3. Cron co 5 minut pozostaje mechanizmem **best effort**. Cloudflare KV ma replikację z opóźnieniem (zazwyczaj poniżej minuty), więc odczyt z innego centrum może pokazać poprzednią migawkę. Żądanie `/latest.json` próbuje pobrać nowe dane z giełdy, jeśli zapis KV jest starszy niż 6 min, a podczas awarii nie udaje świeżości.
 4. Automatyzacje ChatGPT skanujące rynek działają według swojego harmonogramu i mogą nie mieć bezpośredniego dostępu do `workers.dev`. W takim przypadku oznacz Cloudflare jako niedostępne i korzystaj z GitHub, zamiast przedstawiać stare dane jako nowe.
 5. Żadne źródło danych nie składa zleceń. Inwestor zatwierdza i wykonuje transakcje samodzielnie. Bez dźwigni.
 
@@ -30,6 +30,10 @@
 
 - Kod: `src/index.js`; konfiguracja: `wrangler.jsonc`.
 - Automatyczne testy: `.github/workflows/validate-worker.yml` oraz `.github/workflows/probe-worker.yml`.
-- W razie awarii sprawdź kolejno: Cloudflare Workers → Wdrożenia, GitHub → Actions, `/health`, `/diagnostics`. Brak świeżych danych = **STALE/N/D**, nie HOLD wywiedziony z nieaktualnego wykresu.
+- W razie awarii sprawdź kolejno: Cloudflare Workers → Wdrożenia, GitHub → Actions, `/health`, `/history.json`, `/diagnostics`. Brak świeżych danych = **STALE/N/D**, nie HOLD wywiedziony z nieaktualnego wykresu.
 - Dla ograniczenia niepotrzebnych wdrożeń aktualizacje pliku `data/latest.json` w GitHub mają prefiks commit `[skip ci]`.
 - Nie publikuj tutaj żadnych kluczy API, prywatnych potwierdzeń transakcji, sald ani danych osobowych.
+
+### Poprawa opóźnień mostu do ChatGPT (10.11.2026)
+
+Po stronie Cloudflare działa już archiwizacja co 5 minut. Aktualizacja kopii w GitHubie nadal zależy od zadania GitHub Actions, którego harmonogram może być opóźniany. Przygotowano bezpieczny, **opcjonalny** dispatch z Cloudflare co 10 min; zadziała dopiero po świadomym nadaniu sekretu `GITHUB_DISPATCH_TOKEN` dla wybranego repozytorium. Szczegóły: [ALFA_KV_I_GITHUB_MOST.md](ALFA_KV_I_GITHUB_MOST.md). Bez sekretu kod nie wysyła żadnych żądań zapisu do GitHub.
