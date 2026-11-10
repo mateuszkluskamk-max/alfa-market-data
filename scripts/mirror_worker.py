@@ -10,7 +10,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-URL = "https://alfa-market-data.mateuszkluska-mk.workers.dev/latest.json"
+URL = "https://alfa-market-data.mateuszkluska-mk.workers.dev/latest.json?fresh=1"
 OUT = Path("data/cloudflare_latest.json")
 SYMBOLS = ("BTCUSD", "ETHUSD", "SOLUSD")
 INTERVALS = ("1h", "4h", "1d")
