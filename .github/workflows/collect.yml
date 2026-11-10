@@ -38,5 +38,15 @@ jobs:
             echo "No changes"
           else
             git commit -m "[skip ci] data: refresh market snapshot"
-            git push
+            if ! git push; then
+              echo "Another workflow committed during snapshot; rebasing safely"
+              git fetch origin main
+              if git rebase origin/main; then
+                git push
+              else
+                git rebase --abort
+                echo "::error::Concurrent update to the same data file; leaving remote intact, next run will refresh"
+                exit 1
+              fi
+            fi
           fi
