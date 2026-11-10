@@ -45,6 +45,20 @@ Cloudflare próbuje wykonywać pomiary co 5 minut (best effort); istniejący mos
 
 Zakup/sprzedaż wymaga niezależnie kwoty, poziomu, SL/unieważnienia, celu, ryzyka PLN/% i R/R netto ≥1,8 po kosztach oraz potwierdzenia, że dotyczy portfela ALFA. Ochrona kapitału i gotówka pozostają dopuszczalne.
 
+## Retrospekcja 10.11.2026 — test bez dopisywania do rzeczywistych alertów
+
+Na istniejących historycznych świecach **Binance SPOT USDT** (odczyt archiwum `data/history/*_1h.json` po zdarzeniu) sprawdzono tylko reguły **zamkniętej 1H** i wybicia poprzednich 12h, bez symulowania świec niedokończonych.
+
+| Instrument | Świeca powodująca WATCH DOWN (UTC) | Najwcześniejsza dostępność po zamknięciu | Powód |
+|---|---|---|---|
+| ETH/USDT | 09:00–09:59 | 10:00 UTC | 1H -0,656%, wybicie dołem 12h, wolumen 2,792× mediany |
+| SOL/USDT | 10:00–10:59 | 11:00 UTC | 1H -1,309%, wybicie dołem 12h, wolumen 2,719× |
+| BTC/USDT | 13:00–13:59 | 14:00 UTC | 1H -0,870%, wybicie dołem 12h i impuls, wolumen 4,992× |
+
+Duża spadkowa świeca 1H na wszystkich trzech aktywach rozpoczęła się o **15:00 UTC** (BTC -1,591%, ETH -2,822%, SOL -2,442% według danych zapisanych później). Retrospekcja wskazuje, że część kryteriów ostrożności można było zaobserwować wcześniej, lecz nie przesądza, że strat dałoby się uniknąć ani że sygnał byłby użyteczny netto. Ruch BTC 14:00–14:59 UTC był przeciwnie skierowany (+0,883%, wolumen 2,087×), co ilustruje istotne ryzyko fałszywych zwrotów i nadmiarowych ostrzeżeń.
+
+**To symulacja po fakcie (hindsight replay), a NIE historyczny alert ALFA, realna transakcja ani prospektywny test skuteczności.** System produkcyjny używa Bitstamp/Kraken USD, więc wolumeny i chwile sygnału mogą różnić się od Binance USDT. Pierwsza miarodajna ocena będzie możliwa dopiero na zdarzeniach rejestrowanych od uruchomienia v1.
+
 ## Audyt przez 07.11–06.12.2026
 
 Nie zmieniać historii wcześniejszych wersji. Dla każdego zdarzenia z `first_seen_utc` oceń: czy pojawiło się **przed największą świecą, podczas niej czy po niej**, czy trafiło do raportu, opóźnienie raportu, kierunek ruchu po 24 godzinach i 7 dniach, fałszywe wybicie i potencjalny wynik **hipotetyczny** po kosztach. Porównuj z benchmarkami i rezerwą. Rozdzielaj ostrzeżenia `WATCH/ALERT` od rzeczywiście zatwierdzonych `BUY/SELL`.
