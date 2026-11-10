@@ -78,7 +78,7 @@ jobs:
           a=json.load(open("/tmp/alfa-history.json"))
           print("KV bound:",h.get("kv_configured"))
           print("KV latest:",h.get("snapshot_utc"),"seconds:",h.get("age_seconds"))
-          print("KV archive:",a.get("date"),"entries:",a.get("count"),"example:",a.get("keys",[])[-1:] )
+          print("KV archive:",a.get("date"),"entries:",a.get("count"),"latest_keys:",a.get("keys",[])[-3:] )
           if h.get("kv_configured") is not True: sys.exit("KV binding not provisioned")
           if a.get("error") or "keys" not in a: sys.exit("KV archive endpoint not working")
           PY
