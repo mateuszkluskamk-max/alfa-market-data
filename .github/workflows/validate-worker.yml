@@ -22,5 +22,7 @@ jobs:
         run: node --check src/index.js
       - name: Exercise Worker with mocked exchange and KV
         run: node scripts/test-worker.mjs
+      - name: Test ALFA two-way radar
+        run: node scripts/test-radar.mjs
       - name: Validate Cloudflare configuration
         run: node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('wrangler.jsonc','utf8')); if(!c.triggers.crons.includes('*/5 * * * *')) process.exit(1)"
