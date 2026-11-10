@@ -187,3 +187,29 @@ export function analyzeDirectionalRadar(symbol,rows,intervals,nowMs=Date.now()) 
     signals
   };
 }
+
+// Compact rolling event ledger (no extra KV writes): preserves impulses that
+// disappeared between scheduled scans. Store all timestamps explicitly.
+export function mergeSignalWindow(priorEvents, signals, observedUtc, market, horizonHours=6) {
+  const now=Date.parse(observedUtc);
+  if(!Number.isFinite(now))throw Error("Invalid event observation UTC");
+  const since=now-horizonHours*3_600_000;
+  const items=new Map();
+  for(const item of Array.isArray(priorEvents)?priorEvents:[]) {
+    const t=Date.parse(item.last_seen_utc);
+    if(!Number.isFinite(t)||t<since||t>now+10_000||!item.event_id||!item.market)continue;
+    items.set(item.market+"|"+item.event_id,{...item,active_now:false});
+  }
+  for(const signal of Array.isArray(signals)?signals:[]) {
+    if(!signal.event_id||!["UP","DOWN"].includes(signal.direction)||
+       !["WATCH","ALERT"].includes(signal.severity))continue;
+    const k=market+"|"+signal.event_id;
+    const old=items.get(k);
+    items.set(k,{...signal,market,first_seen_utc:old?.first_seen_utc||observedUtc,
+      last_seen_utc:observedUtc,seen_snapshots:(old?.seen_snapshots||0)+1,
+      active_now:true});
+  }
+  return [...items.values()]
+    .sort((a,b)=>Date.parse(b.last_seen_utc)-Date.parse(a.last_seen_utc))
+    .slice(0,48);
+}
