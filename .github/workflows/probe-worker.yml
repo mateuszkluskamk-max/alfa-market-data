@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - 'src/index.js'
+      - 'src/radar.js'
       - 'wrangler.jsonc'
       - '.github/workflows/probe-worker.yml'
   workflow_dispatch:
@@ -91,4 +92,26 @@ jobs:
           import json
           v=json.load(open('/tmp/bridge-status.json'))
           print('Bridge:', {k:v.get(k) for k in ('status','checked_utc','snapshot_utc','http_status','detail') if k in v})
+          PY
+      - name: Validate two-direction ALFA radar v1
+        run: |
+          curl --fail-with-body -sS --max-time 45 'https://alfa-market-data.mateuszkluska-mk.workers.dev/radar.json' -o /tmp/alfa-radar.json
+          python3 - <<'PY'
+          import json,datetime
+          d=json.load(open('/tmp/alfa-radar.json'))
+          assert d.get('schema_version',0)>=5, 'Radar schema is not deployed'
+          assert d.get('radar_version')=='directional-v1', 'Wrong radar version'
+          assert set(d.get('assets',{}))=={'BTCUSD','ETHUSD','SOLUSD'},'Missing market'
+          for symbol, a in d['assets'].items():
+              radar=a.get('radar',{})
+              assert radar.get('version')=='directional-v1'
+              print(symbol,'price_usd=',a['last_price_usd'],'status=',radar.get('status'),'metrics=',radar.get('metrics'),flush=True)
+          for sig in d.get('signals',[]):
+              assert sig.get('direction') in ('UP','DOWN')
+              assert sig.get('severity') in ('WATCH','ALERT')
+              assert sig.get('event_id') and 'BUY' not in sig.get('kind','')
+              print('SIGNAL',sig['event_id'],sig['severity'],'confirmed=',sig['confirmed'],flush=True)
+          age=(datetime.datetime.now(datetime.timezone.utc)-datetime.datetime.fromisoformat(d['snapshot_utc'].replace('Z','+00:00'))).total_seconds()
+          assert -10<=age<=600,f'Radar stale: {age}'
+          print('PASS: live bidirectional ALFA radar, age_seconds=',round(age,1),'signals=',len(d.get('signals',[])),flush=True)
           PY
