@@ -44,10 +44,14 @@ export function analyzeDirectionalRadar(symbol,rows,intervals,nowMs=Date.now()) 
   const cfg=BASE[symbol];
   if(!cfg)throw Error("Unknown radar symbol: "+symbol);
   if(!Array.isArray(rows)||rows.length<65)throw Error("Insufficient hourly rows for radar");
-  const parsed=rows.map(r=>({
-    t:num(r[0])*1000,o:num(r[1]),h:num(r[2]),l:num(r[3]),
-    c:num(r[4]),v:num(r[6])
-  })).filter(r=>r.t<=nowMs);
+  const parsed=rows.map(r=>{
+    const item={t:num(r[0])*1000,o:num(r[1]),h:num(r[2]),l:num(r[3]),
+      c:num(r[4]),v:num(r[6])};
+    if(item.v<0||item.o<=0||item.c<=0||item.l<=0||item.h<=0||
+       item.l>Math.min(item.o,item.c)||item.h<Math.max(item.o,item.c))
+      throw Error("Invalid hourly radar OHLCV");
+    return item;
+  }).filter(r=>r.t<=nowMs);
   for(let i=1;i<parsed.length;i++)
     if(parsed[i].t-parsed[i-1].t!==HOUR)throw Error("Radar 1H chronology gap");
   const closed=parsed.filter(r=>r.t+HOUR<=nowMs);
