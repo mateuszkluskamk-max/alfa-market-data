@@ -1,6 +1,8 @@
 name: ALFA Market Data Snapshot
 on:
   workflow_dispatch:
+  repository_dispatch:
+    types: [alfa_cloudflare_sync]
   schedule:
     - cron: '2,7,12,17,22,27,32,37,42,47,52,57 * * * *'
 permissions:
@@ -22,6 +24,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Download and validate Binance public candles
+        if: github.event_name != 'repository_dispatch'
         run: python scripts/collect.py
       - name: Mirror Cloudflare market feed (best effort, no stale overwrite)
         run: |
