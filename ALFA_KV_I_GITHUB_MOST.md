@@ -23,7 +23,7 @@ GitHub Actions `.github/workflows/collect.yml` rozpoznaje wejściowy parametr `c
 - Podgląd odpowiedzi GitHub (bez klucza): https://alfa-market-data.mateuszkluska-mk.workers.dev/bridge-status.json
 - `accepted_by_github` oznacza tylko **HTTP 204** przyjęty przez GitHub; aby potwierdzić faktyczne ukończenie zadania, sprawdź nowe uruchomienie `workflow_dispatch` w Actions oraz `data/cloudflare_latest.json`.
 - `dispatch_failed` pokazuje bezpiecznie jedynie kod HTTP, nie treść żądania ani sekret.
-- KV zapisuje standardowo 2 klucze co 5 minut (~576 zapisów/dzień) oraz dodatkowy status tylko przy 10-minutowym dispatch (~144/dzień). Razem około **720 zapisów/dzień** (z marginesem do 1000 w planie Free); żadnych dodatkowych zapisów przy zwykłym odczycie.
+- **Aktualizacja 11.11.2026:** po ostrzeżeniu Cloudflare o osiągnięciu 50% limitu KV zlikwidowano trzeci zapis statusu. Od teraz status mostu `bridge_status` jest osadzany w już istniejącym kluczu `latest:multi-venue-usd:v5`, a `/bridge-status.json` najpierw odczytuje go stamtąd (z awaryjnym odczytem starego klucza). Zachowano archiwum i bieżący stan co 5 minut, a GitHub dispatch co ok. 10 minut. Planowane użycie: **2 zapisy × 288 uruchomień = około 576 zapisów/dobę** zamiast 720, poniżej darmowego limitu 1000/dobę. Przedziały i częstotliwość Cron są best effort; inne ręczne operacje w koncie też zużywają limit.
 - Zapis Cloudflare KV jest niezależny od GitHuba. Awaria dispatch nie unieważnia rynkowych danych zapisanych w KV.
 - Zamknięcie dostępu: usuń sekret w Cloudflare i unieważnij PAT w GitHub.
 
