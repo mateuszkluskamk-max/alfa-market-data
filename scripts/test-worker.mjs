@@ -73,7 +73,8 @@ assert.equal(dispatches,1,"no dispatch on non-matching five-minute cron");
 response=await feed.fetch(request("/bridge-status.json"),env);
 assert.equal(response.status,200);
 assert.equal((await response.json()).status,"accepted_by_github");
-assert.equal(writes,7,"six history+latest writes and one dispatch status");
+assert.equal(writes,6,"three cron runs at exactly two KV writes each");
+assert.ok(storage["latest:multi-venue-usd:v5"].includes('"bridge_status"'),"bridge status embedded inside latest KV");
 
 assert.ok(Object.keys(storage).some(k=>k.startsWith("archive:v1:")));
 response=await feed.fetch(request("/latest.json"),env);
