@@ -132,11 +132,14 @@ async function dispatchGitHubMirror(env, snapshot, scheduledTime) {
   return {enabled:true,dispatched:true};
 }
 
-async function store(env, data) {
+async function store(env, data, bridgeStatus=null) {
   if (!env?.ALFA_KV) return;
   const prev=await env.ALFA_KV.get(KEY,"json");
   const recent_events=mergeSignalWindow(prev?.recent_events,data.signals,data.snapshot_utc,data.market);
+  // Bridge status now shares the existing latest record: no third KV write.
+  const bridge_status=bridgeStatus||prev?.bridge_status||null;
   const stored = {...data,recent_events,event_window_hours:6,
+    ...(bridge_status?{bridge_status}:{}),
     stored_by:"cloudflare_cron", stored_utc:iso(Date.now())};
   // Two KV writes per five-minute run: latest + immutable 14-day history.
   // Cron runs 288 times per day => 576 writes, under Free 1000/day.
@@ -483,7 +486,9 @@ export default {
     }
     if (url.pathname === "/bridge-status.json") {
       if(!env?.ALFA_KV) return reply({status:"unavailable",reason:"kv_not_bound"},503);
-      const status=await env.ALFA_KV.get(BRIDGE_STATUS_KEY,"json");
+      const stored=await env.ALFA_KV.get(KEY,"json");
+      // Legacy status is read-only fallback; no more writes to this key.
+      const status=stored?.bridge_status||await env.ALFA_KV.get(BRIDGE_STATUS_KEY,"json");
       return reply(status||{status:"not_observed",note:"No 10-minute dispatch has been recorded yet"});
     }
     if (url.pathname === "/health") {
@@ -505,29 +510,27 @@ export default {
   },
   async scheduled(_controller,env,_ctx) {
     if(!env?.ALFA_KV) { console.log("ALFA Cron: no KV binding, skipping redundant provider requests"); return; }
-    const snap = await liveSnapshot();
-    await store(env, snap);
-    console.log("ALFA Cron", snap.snapshot_utc, "KV configured:", !!env?.ALFA_KV);
-    // One Actions workflow_dispatch per UTC 10-minute slot; never publish secrets.
+    const snap=await liveSnapshot();
     const scheduledTime=_controller?.scheduledTime||Date.now();
+    let bridgeStatus=null;
     if(new Date(scheduledTime).getUTCMinutes()%10===0) {
-      let status;
       try {
         const bridge=await dispatchGitHubMirror(env,snap,scheduledTime);
-        status={checked_utc:iso(Date.now()),snapshot_utc:snap.snapshot_utc,
+        bridgeStatus={checked_utc:iso(Date.now()),snapshot_utc:snap.snapshot_utc,
           status:bridge.dispatched?"accepted_by_github":bridge.reason||"skipped",
           detail:"GitHub HTTP 204 means accepted, not yet completed or committed"};
-        console.log("ALFA GitHub dispatch",status.status);
+        console.log("ALFA GitHub dispatch",bridgeStatus.status);
       } catch(error) {
-        // KV snapshots stay valid if optional GitHub dispatch fails.
         const errorString=String(error);
-        const http=errorString.match(/HTTP (\d{3})/);
-        status={checked_utc:iso(Date.now()),snapshot_utc:snap.snapshot_utc,
+        const http=errorString.match(/HTTP (\\d{3})/);
+        bridgeStatus={checked_utc:iso(Date.now()),snapshot_utc:snap.snapshot_utc,
           status:"dispatch_failed",http_status:http?Number(http[1]):null};
-        console.error("ALFA optional GitHub dispatch failed",status.http_status??"network_error");
+        console.error("ALFA optional GitHub dispatch failed",bridgeStatus.http_status??"network_error");
       }
-      try {await env.ALFA_KV.put(BRIDGE_STATUS_KEY,JSON.stringify(status));}
-      catch(error){console.error("ALFA bridge-status write failed",String(error).slice(0,100));}
     }
+    // Exactly two writes per 5-minute cron: archive and latest (+ status embedded).
+    // 288 * 2 = 576 writes/day; no loss of 5-minute archives or event ledger.
+    await store(env,snap,bridgeStatus);
+    console.log("ALFA Cron",snap.snapshot_utc,"KV configured:",!!env?.ALFA_KV);
   }
 };
