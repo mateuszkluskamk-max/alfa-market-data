@@ -522,7 +522,7 @@ export default {
         console.log("ALFA GitHub dispatch",bridgeStatus.status);
       } catch(error) {
         const errorString=String(error);
-        const http=errorString.match(/HTTP (\\d{3})/);
+        const http=errorString.match(/HTTP (\d{3})/);
         bridgeStatus={checked_utc:iso(Date.now()),snapshot_utc:snap.snapshot_utc,
           status:"dispatch_failed",http_status:http?Number(http[1]):null};
         console.error("ALFA optional GitHub dispatch failed",bridgeStatus.http_status??"network_error");
