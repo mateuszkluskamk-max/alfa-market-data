@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "snapshot_utc": "2026-11-14T11:15:59Z",
+  "snapshot_utc": "2026-11-14T11:54:19Z",
   "market": "Binance spot / USDT (not Revolut X)",
   "data_type": "scheduled REST snapshot, not a continuous live stream",
   "symbols": {
     "BTCUSDT": {
-      "last_price_usdt": 67243.22,
+      "last_price_usdt": 67296.01,
       "intervals": {
         "1h": {
           "last_closed": {
@@ -28,15 +28,15 @@
             "close_time_utc": "2026-11-14T11:59:59Z",
             "open": 67292.0,
             "high": 67365.27,
-            "low": 67200.0,
-            "close": 67243.22,
-            "volume_base": 171.3379,
-            "volume_quote_usdt": 11527570.1884351,
-            "trades": 29729,
+            "low": 67119.32,
+            "close": 67296.01,
+            "volume_base": 586.70022,
+            "volume_quote_usdt": 39448453.7608346,
+            "trades": 96661,
             "closed": false,
-            "change_pct": -0.072,
-            "volume_ratio_median20": 0.27,
-            "open_candle_volume_pace_ratio": 1.012
+            "change_pct": 0.006,
+            "volume_ratio_median20": 0.924,
+            "open_candle_volume_pace_ratio": 1.02
           }
         },
         "4h": {
@@ -61,14 +61,14 @@
             "open": 67165.42,
             "high": 67523.05,
             "low": 66966.79,
-            "close": 67243.21,
-            "volume_base": 2250.60445,
-            "volume_quote_usdt": 151297581.1996016,
-            "trades": 515651,
+            "close": 67296.0,
+            "volume_base": 2665.96715,
+            "volume_quote_usdt": 179218490.3524006,
+            "trades": 582584,
             "closed": false,
-            "change_pct": 0.116,
-            "volume_ratio_median20": 0.729,
-            "open_candle_volume_pace_ratio": 0.892
+            "change_pct": 0.194,
+            "volume_ratio_median20": 0.863,
+            "open_candle_volume_pace_ratio": 0.884
           }
         },
         "1d": {
@@ -93,20 +93,20 @@
             "open": 68314.01,
             "high": 68446.21,
             "low": 66456.0,
-            "close": 67243.21,
-            "volume_base": 10626.03676,
-            "volume_quote_usdt": 715014010.8076471,
-            "trades": 2552059,
+            "close": 67296.0,
+            "volume_base": 11041.39956,
+            "volume_quote_usdt": 742934926.6900461,
+            "trades": 2618993,
             "closed": false,
-            "change_pct": -1.567,
-            "volume_ratio_median20": 0.629,
-            "open_candle_volume_pace_ratio": 1.339
+            "change_pct": -1.49,
+            "volume_ratio_median20": 0.653,
+            "open_candle_volume_pace_ratio": 1.317
           }
         }
       }
     },
     "ETHUSDT": {
-      "last_price_usdt": 1906.99,
+      "last_price_usdt": 1910.66,
       "intervals": {
         "1h": {
           "last_closed": {
@@ -129,15 +129,15 @@
             "close_time_utc": "2026-11-14T11:59:59Z",
             "open": 1909.15,
             "high": 1911.56,
-            "low": 1905.5,
-            "close": 1906.99,
-            "volume_base": 1532.7901,
-            "volume_quote_usdt": 2923412.885331,
-            "trades": 12427,
+            "low": 1903.43,
+            "close": 1910.66,
+            "volume_base": 5557.0303,
+            "volume_quote_usdt": 10602727.005134,
+            "trades": 53770,
             "closed": false,
-            "change_pct": -0.113,
-            "volume_ratio_median20": 0.197,
-            "open_candle_volume_pace_ratio": 0.738
+            "change_pct": 0.079,
+            "volume_ratio_median20": 0.716,
+            "open_candle_volume_pace_ratio": 0.79
           }
         },
         "4h": {
@@ -162,14 +162,14 @@
             "open": 1898.2,
             "high": 1919.76,
             "low": 1894.46,
-            "close": 1906.99,
-            "volume_base": 22982.9983,
-            "volume_quote_usdt": 43791702.287515,
-            "trades": 273417,
+            "close": 1910.67,
+            "volume_base": 27007.2568,
+            "volume_quote_usdt": 51471051.372579,
+            "trades": 314761,
             "closed": false,
-            "change_pct": 0.463,
-            "volume_ratio_median20": 0.618,
-            "open_candle_volume_pace_ratio": 0.757
+            "change_pct": 0.657,
+            "volume_ratio_median20": 0.727,
+            "open_candle_volume_pace_ratio": 0.744
           }
         },
         "1d": {
@@ -194,20 +194,20 @@
             "open": 1929.88,
             "high": 1936.49,
             "low": 1878.0,
-            "close": 1906.99,
-            "volume_base": 137093.873,
-            "volume_quote_usdt": 260692378.504581,
-            "trades": 1283108,
+            "close": 1910.67,
+            "volume_base": 141118.1315,
+            "volume_quote_usdt": 268371727.589645,
+            "trades": 1324452,
             "closed": false,
-            "change_pct": -1.186,
-            "volume_ratio_median20": 0.549,
-            "open_candle_volume_pace_ratio": 1.169
+            "change_pct": -0.995,
+            "volume_ratio_median20": 0.565,
+            "open_candle_volume_pace_ratio": 1.139
           }
         }
       }
     },
     "SOLUSDT": {
-      "last_price_usdt": 75.81,
+      "last_price_usdt": 76.06,
       "intervals": {
         "1h": {
           "last_closed": {
@@ -229,16 +229,16 @@
             "open_time_utc": "2026-11-14T11:00:00Z",
             "close_time_utc": "2026-11-14T11:59:59Z",
             "open": 75.73,
-            "high": 75.88,
-            "low": 75.62,
-            "close": 75.82,
-            "volume_base": 18971.801,
-            "volume_quote_usdt": 1437261.62263,
-            "trades": 4561,
+            "high": 76.06,
+            "low": 75.59,
+            "close": 76.06,
+            "volume_base": 58725.816,
+            "volume_quote_usdt": 4452773.09087,
+            "trades": 15547,
             "closed": false,
-            "change_pct": 0.119,
-            "volume_ratio_median20": 0.159,
-            "open_candle_volume_pace_ratio": 0.595
+            "change_pct": 0.436,
+            "volume_ratio_median20": 0.494,
+            "open_candle_volume_pace_ratio": 0.544
           }
         },
         "4h": {
@@ -263,14 +263,14 @@
             "open": 75.25,
             "high": 76.22,
             "low": 75.07,
-            "close": 75.82,
-            "volume_base": 272885.721,
-            "volume_quote_usdt": 20634177.49795,
-            "trades": 60521,
+            "close": 76.06,
+            "volume_base": 312652.882,
+            "volume_quote_usdt": 23650688.85095,
+            "trades": 71513,
             "closed": false,
-            "change_pct": 0.757,
-            "volume_ratio_median20": 0.758,
-            "open_candle_volume_pace_ratio": 0.928
+            "change_pct": 1.076,
+            "volume_ratio_median20": 0.869,
+            "open_candle_volume_pace_ratio": 0.89
           }
         },
         "1d": {
@@ -295,14 +295,14 @@
             "open": 78.2,
             "high": 78.5,
             "low": 74.85,
-            "close": 75.81,
-            "volume_base": 1794581.284,
-            "volume_quote_usdt": 136320733.55597,
-            "trades": 391480,
+            "close": 76.06,
+            "volume_base": 1834347.908,
+            "volume_quote_usdt": 139337204.32275,
+            "trades": 402467,
             "closed": false,
-            "change_pct": -3.056,
-            "volume_ratio_median20": 0.848,
-            "open_candle_volume_pace_ratio": 1.807
+            "change_pct": -2.737,
+            "volume_ratio_median20": 0.867,
+            "open_candle_volume_pace_ratio": 1.748
           }
         }
       }
